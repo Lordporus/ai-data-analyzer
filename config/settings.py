@@ -43,8 +43,8 @@ BRAND_COLOR = os.getenv("BRAND_COLOR", "#6C63FF")
 BRAND_LOGO_URL = os.getenv("BRAND_LOGO_URL", "")
 
 # ── Auth ─────────────────────────────────────────────────────────────────
-JWT_SECRET = os.getenv("JWT_SECRET", "change-me-in-production")
-API_KEY_ENTERPRISE = os.getenv("API_KEY_ENTERPRISE", "change-me-in-production")
+JWT_SECRET = os.getenv("JWT_SECRET", "")
+API_KEY_ENTERPRISE = os.getenv("API_KEY_ENTERPRISE", "")
 
 # ── Usage tracking ───────────────────────────────────────────────────────
 ENABLE_USAGE_TRACKING = os.getenv("ENABLE_USAGE_TRACKING", "false").lower() == "true"

@@ -26,7 +26,7 @@ Auditor: Automated static analysis
 | Severity | CRITICAL |
 | File | `.env` |
 | Line | 5 |
-| Content | `LLM_API_KEY=AIzaSyBcW1Ytcad1hOhsuGxmYwsgyo19zoCSFBg` |
+| Content | `LLM_API_KEY=<REDACTED>` |
 | Type | Google Generative AI API Key |
 
 **Description**: A live Google API key is present in the `.env` file. This key follows the `AIzaSy` prefix pattern used by Google Cloud API keys and is fully functional. If committed to a public repository, this key grants unauthorized access to the associated Google Cloud project.
