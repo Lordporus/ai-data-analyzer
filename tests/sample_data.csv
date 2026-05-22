@@ -1,0 +1,101 @@
+id,name,email,department,salary,age,start_date,performance_score,city,status
+1,John Smith,john@example.com,Engineering,85000,32,2020-01-15,4.5,New York,Active
+2,Jane Doe,jane@example.com,Marketing,72000,28,2019-06-20,3.8,San Francisco,Active
+3,Bob Johnson,bob@example.com,Engineering,92000,35,2018-03-10,4.2,New York,Active
+4,Alice Williams,alice@example.com,Sales,68000,26,2021-02-28,3.5,Chicago,Active
+5,Charlie Brown,charlie@example.com,Engineering,95000,40,2016-07-01,4.8,San Francisco,Active
+6, Eve Davis ,eve@example.com,Marketing,70000,30,2020-08-15,3.9,New York,Active
+7,Frank Miller,frank@example.com,Sales,65000,27,2021-11-01,3.2,Chicago,Active
+8,Grace Wilson,grace@example.com,Engineering,88000,33,2019-04-22,4.1,San Francisco,Active
+9,Henry Taylor,henry@example.com,HR,62000,29,2020-09-10,3.7,New York,Active
+10,Ivy Anderson,ivy@example.com,Marketing,71000,31,2018-12-05,4.0,Chicago,Active
+11,Jack Thomas,jack@example.com,Engineering,91000,37,2017-05-18,4.4,San Francisco,Active
+12,Kate Jackson,,Sales,67000,25,2022-01-10,3.3,New York,Active
+13,Leo White,leo@example.com,HR,60000,28,2021-06-15,,Chicago,Active
+14,Mia Harris,mia@example.com,Engineering,94000,36,2017-09-20,4.6,San Francisco,Active
+15,Noah Martin,noah@example.com,Marketing,73000,32,2019-02-14,3.9,New York,Active
+16,Olivia Garcia,olivia@example.com,Sales,,26,2022-03-01,3.4,Chicago,Active
+17,Peter Lee,peter@example.com,Engineering,89000,34,2018-08-12,4.3,San Francisco,Active
+18,Quinn Clark,quinn@example.com,HR,61000,27,2021-04-20,3.6,New York,Active
+19,Ruby Lewis,ruby@example.com,Marketing,74000,33,2018-10-30,4.1,Chicago,Active
+20,Sam Walker,sam@example.com,Engineering,96000,41,2015-11-08,4.9,San Francisco,Active
+21,Tina Hall,tina@example.com,Sales,66000,24,2022-05-15,3.1,New York,Active
+22,Uma Allen,uma@example.com,HR,63000,30,2020-07-22,3.8,Chicago,Active
+23,Victor Young,victor@example.com,Engineering,90000,38,2017-01-25,4.5,San Francisco,Active
+24,Wendy King,wendy@example.com,Marketing,75000,34,2019-09-18,4.2,New York,Active
+25,Xander Wright,xander@example.com,Sales,69000,29,2021-08-05,3.6,Chicago,Active
+26,Yara Lopez,yara@example.com,Engineering,87000,31,2019-12-01,4.0,San Francisco,Active
+27,Zane Hill,zane@example.com,HR,64000,26,2021-10-10,3.4,New York,Active
+28,Amy Scott,amy@example.com,Marketing,71000,30,2020-03-15,3.7,Chicago,Active
+29,Ben Green,ben@example.com,Engineering,93000,39,2016-04-20,4.7,San Francisco,Active
+30,Cora Adams,cora@example.com,Sales,67000,27,2022-02-18,3.3,New York,Active
+31, John Smith ,john@example.com,Engineering,85000,32,2020-01-15,4.5,New York,Active
+32,Diana Baker,diana@example.com,HR,62000,28,2021-07-01,3.5,Chicago,Active
+33,Ethan Nelson,ethan@example.com,Engineering,88000,35,2018-06-25,4.2,San Francisco,Active
+34,Fiona Carter,fiona@example.com,Marketing,76000,36,2018-01-14,4.3,New York,Active
+35,George Mitchell,george@example.com,Sales,70000,30,2020-11-20,3.8,Chicago,Active
+36,Holly Perez,holly@example.com,Engineering,91000,37,2017-08-08,4.4,San Francisco,Active
+37,Ivan Roberts,ivan@example.com,HR,59000,25,2022-04-01,3.0,New York,Active
+38,Julia Turner,julia@example.com,Marketing,72000,32,2019-05-22,3.9,Chicago,Active
+39,Kyle Phillips,kyle@example.com,Engineering,97000,42,2015-02-14,5.0,San Francisco,Active
+40,Luna Campbell,luna@example.com,Sales,68000,28,2021-09-12,3.4,New York,Active
+41,Max Parker,max@example.com,HR,65000,31,2020-01-30,3.6,Chicago,Active
+42,Nina Evans,nina@example.com,Engineering,86000,30,2019-11-05,4.0,San Francisco,Active
+43,Oscar Edwards,oscar@example.com,Marketing,70000,29,2020-06-18,3.7,New York,Active
+44,Paula Collins,paula@example.com,Sales,66000,26,2022-01-22,3.2,Chicago,Active
+45,Quentin Stewart,quentin@example.com,Engineering,89000,36,2017-10-14,4.3,San Francisco,Active
+46,Rachel Sanchez,rachel@example.com,HR,61000,27,2021-03-08,3.5,New York,Active
+47,Steve Morris,steve@example.com,Marketing,73000,33,2019-01-25,4.0,Chicago,Active
+48,Tara Rogers,tara@example.com,Engineering,92000,38,2016-12-10,4.6,San Francisco,Active
+49,Ulysses Reed,ulysses@example.com,Sales,71000,31,2020-10-05,3.7,New York,Active
+50,Vera Cook,vera@example.com,HR,63000,29,2021-05-20,3.4,Chicago,Active
+51,Walter Morgan,walter@example.com,Engineering,94000,40,2016-03-15,4.7,San Francisco,Active
+52,Xena Bell,xena@example.com,Marketing,74000,34,2018-09-22,4.1,New York,Active
+53,Yusuf Murphy,yusuf@example.com,Sales,69000,28,2021-12-01,3.5,Chicago,Active
+54,Zara Bailey,zara@example.com,Engineering,87000,32,2019-07-14,4.0,San Francisco,Active
+55,Aaron Rivera,aaron@example.com,HR,60000,26,2022-06-01,3.1,New York,Active
+56,Bella Cooper,bella@example.com,Marketing,75000,35,2018-04-18,4.2,Chicago,Active
+57,Caleb Richardson,caleb@example.com,Engineering,95000,41,2015-08-20,4.8,San Francisco,Active
+58,Daisy Cox,daisy@example.com,Sales,67000,27,2022-03-10,3.3,New York,Active
+59,Eli Howard,eli@example.com,HR,64000,30,2020-12-15,3.7,Chicago,Active
+60,Faye Ward,faye@example.com,Engineering,300000,33,2019-02-28,4.1,San Francisco,Active
+61,Grant Torres,grant@example.com,Marketing,72000,31,2019-10-05,3.8,New York,Active
+62,Hazel Peterson,hazel@example.com,Sales,66000,25,2022-07-15,3.0,Chicago,Active
+63,Ian Gray,ian@example.com,Engineering,89000,36,2017-06-20,4.3,San Francisco,Active
+64,Jade Ramirez,jade@example.com,HR,62000,28,2021-01-18,3.5,New York,Active
+65,Karl James,karl@example.com,Marketing,71000,30,2020-04-22,3.9,Chicago,Active
+66,Lily Watson,lily@example.com,Engineering,91000,37,2017-03-10,4.4,San Francisco,Active
+67,Miles Brooks,miles@example.com,Sales,70000,29,2021-06-28,3.6,New York,Active
+68,Nora Kelly,nora@example.com,HR,61000,27,2021-08-12,3.4,Chicago,Active
+69,Owen Sanders,owen@example.com,Engineering,93000,39,2016-09-05,4.6,San Francisco,Active
+70,Penny Price,penny@example.com,Marketing,76000,36,2018-02-14,4.3,New York,Active
+71,Reed Bennett,reed@example.com,Sales,68000,28,2022-04-20,3.4,Chicago,Active
+72,Sara Wood,sara@example.com,Engineering,90000,35,2018-07-30,4.2,San Francisco,Active
+73,Troy Barnes,troy@example.com,HR,65000,31,2020-05-10,3.6,New York,Active
+74,Uma Ross,uma.ross@example.com,Marketing,74000,33,2019-03-25,4.0,Chicago,Active
+75,Vince Powell,vince@example.com,Engineering,96000,42,2015-06-15,4.9,San Francisco,Active
+76,Wren Long,wren@example.com,Sales,67000,26,2022-08-01,3.2,New York,Active
+77,Xavier Hughes,xavier@example.com,HR,60000,25,2022-09-10,3.0,Chicago,Active
+78,Yvonne Butler,yvonne@example.com,Engineering,88000,34,2018-11-18,4.1,San Francisco,Active
+79,Zack Simmons,zack@example.com,Marketing,73000,32,2019-08-05,3.9,New York,Active
+80,Abby Foster,abby@example.com,Sales,71000,30,2020-07-12,3.7,Chicago,Active
+81,Blake Gonzales,blake@example.com,Engineering,92000,38,2017-02-22,4.5,San Francisco,Active
+82,Clara Bryant,clara@example.com,HR,63000,29,2021-04-15,3.5,New York,Active
+83,Derek Alexander,derek@example.com,Marketing,75000,35,2018-06-08,4.2,Chicago,Active
+84,Elise Russell,elise@example.com,Engineering,94000,40,2016-10-20,4.7,San Francisco,Active
+85,Felix Griffin,felix@example.com,Sales,66000,27,2022-05-25,3.3,New York,Active
+86,Gemma Diaz,gemma@example.com,HR,62000,28,2021-09-30,3.4,Chicago,Active
+87,Hank Hayes,hank@example.com,Engineering,89000,36,2017-12-01,4.3,San Francisco,Active
+88,Iris Myers,iris@example.com,Marketing,72000,31,2019-11-15,3.8,New York,Active
+89,Jake Ford,jake@example.com,Sales,69000,29,2021-07-20,3.6,Chicago,Active
+90,Karen Hamilton,karen@example.com,Engineering,91000,37,2017-04-08,4.4,San Francisco,Active
+91,Liam Graham,liam@example.com,HR,64000,30,2020-08-25,3.7,New York,Active
+92,Maya Sullivan,maya@example.com,Marketing,74000,33,2019-01-12,4.0,Chicago,Active
+93,Nick Wallace,nick@example.com,Engineering,95000,41,2015-10-30,4.8,San Francisco,Active
+94,Opal West,opal@example.com,Sales,68000,28,2022-02-14,3.5,New York,Active
+95,Paul Jordan,paul@example.com,HR,61000,27,2021-11-20,3.3,Chicago,Active
+96,Quinn Owens,quinn.o@example.com,Engineering,87000,32,2019-06-05,4.0,San Francisco,Active
+97,Rosa Freeman,rosa@example.com,Marketing,73000,34,2018-12-18,4.1,New York,Active
+98,Sean Dixon,sean@example.com,Sales,70000,30,2020-09-01,3.7,Chicago,Active
+99,Tess Hunt,tess@example.com,Engineering,93000,39,2016-05-12,4.6,San Francisco,Active
+100,Umar Webb,umar@example.com,HR,65000,31,2020-02-28,3.6,New York,Active
