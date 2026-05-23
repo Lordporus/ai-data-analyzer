@@ -61,22 +61,10 @@ from agents.report_validation import ReportValidationEngine
 from utils.branding import BrandConfig
 
 # ── Font Registration ────────────────────────────────────────────────
-try:
-    pdfmetrics.registerFont(TTFont("Inter-Regular", "assets/fonts/Inter-Regular.ttf"))
-    pdfmetrics.registerFont(TTFont("Inter-SemiBold", "assets/fonts/Inter-SemiBold.ttf"))
-    pdfmetrics.registerFont(TTFont("Inter-Bold", "assets/fonts/Inter-Bold.ttf"))
-    pdfmetrics.registerFont(TTFont("Inter-Italic", "assets/fonts/Inter-Italic.ttf"))
-    
-    FONT_HEAD = "Inter-Bold"
-    FONT_SUB = "Inter-SemiBold"
-    FONT_BODY = "Inter-Regular"
-    FONT_ITALIC = "Inter-Italic"
-except Exception as e:
-    logger.warning(f"Failed to register Inter fonts, falling back to Helvetica: {e}")
-    FONT_HEAD = "Helvetica-Bold"
-    FONT_SUB = "Helvetica-Bold"
-    FONT_BODY = "Helvetica"
-    FONT_ITALIC = "Helvetica-Oblique"
+FONT_HEAD = "Helvetica-Bold"
+FONT_SUB = "Helvetica-Bold"
+FONT_BODY = "Helvetica"
+FONT_ITALIC = "Helvetica-Oblique"
 
 # ── Premium Color System ─────────────────────────────────────────────
 # Core palette: deep purple + violet accent + soft lavender background
