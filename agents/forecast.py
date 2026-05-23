@@ -32,6 +32,13 @@ from utils.intelligence_engine import IntelligenceEngine
 
 logger = logging.getLogger(__name__)
 
+# Columns that should NEVER be forecasted — identifiers, codes, serials
+FORECAST_EXCLUDE = [
+    'id', 'cust_id', 'order_id', 'customer_id', 'index',
+    'postal_code', 'zip', 'pincode', 'phone', 'mobile',
+    'sr_no', 'serial', 'row_number', 'unnamed',
+]
+
 
 @dataclass
 class ForecastResult:
@@ -44,7 +51,8 @@ class ForecastResult:
     
     # Simulation Defaults (to help UI)
     available_metrics: List[str] = field(default_factory=list)
-    
+    audit_log: Dict[str, Any] = field(default_factory=dict)
+
     def get_forecast(self, metric: str) -> Optional[Dict[str, Any]]:
         return self.forecasts.get(metric)
 
@@ -81,25 +89,52 @@ class ForecastAgent(BaseAgent):
                 
             self._log(f"Detected time-series on '{date_col}' (Freq: {period})")
 
-            # 2. Identify Metrics to Forecast
+            # 2. Identify Metrics to Forecast — business columns only
             num_cols = [c for c, t in types.items() if t == "numeric"]
-            metrics = [c for c in num_cols if df[c].nunique() > 5]
-            
+            forecastable = [
+                c for c in num_cols
+                if self._is_forecastable_column(c, df[c])
+            ]
+            # Cap at top 5 most relevant columns
+            forecastable = forecastable[:5]
+
             # 3. Generate Base Forecasts
             forecasts = {}
-            for metric in metrics[:5]: # Limit to top 5
+            for metric in forecastable:
                 f_data = self._generate_forecast_v2(df, date_col, metric, period)
                 if f_data:
                     forecasts[metric] = f_data
             
             self._log(f"Generated ForecastEngine 3.0 results for {len(forecasts)} metrics.")
 
+            audit_log = {}
+            for metric, f_data in forecasts.items():
+                model_type = f_data.get("forecast_model_type", "Linear")
+                r2 = f_data.get("r2", 0.0)
+                conf = f_data.get("confidence_level", "LOW")
+                
+                if model_type == "Holt-Winters":
+                    formula = "Holt-Winters Triple Exponential Smoothing (statsmodels.tsa.holtwinters.ExponentialSmoothing)"
+                    threshold = f"Seasonal cycle of {f_data.get('dominant_lag', 0)} periods detected; residual variance based confidence bounds"
+                else:
+                    formula = "Ordinary Least Squares (OLS) Linear Regression (scipy.stats.linregress)"
+                    threshold = "Trend-line extrapolated over future index; standard deviation based rolling bounds"
+                    
+                audit_log[metric] = {
+                    "columns_used": [metric, date_col],
+                    "formula": formula,
+                    "threshold": threshold,
+                    "method": "deterministic",
+                    "result": f"Forecast generated successfully with model '{model_type}' (R² = {r2:.4f}, Confidence = {conf})."
+                }
+
             result = ForecastResult(
                 is_time_series=True,
                 primary_date_col=date_col,
                 period_type=period,
                 forecasts=forecasts,
-                available_metrics=list(forecasts.keys())
+                available_metrics=list(forecasts.keys()),
+                audit_log=audit_log
             )
             
             return result
@@ -108,6 +143,45 @@ class ForecastAgent(BaseAgent):
             self.log.errors.append(str(e))
             logger.error(f"ForecastAgent failed: {e}", exc_info=True)
             return ForecastResult(is_time_series=False)
+
+    def _is_forecastable_column(self, col_name: str, series: pd.Series) -> bool:
+        """
+        Returns True only if a numeric column represents a real business metric
+        worth forecasting.  Rejects identifier-like, high-cardinality, and
+        near-zero-variance columns.
+        """
+        col_lower = col_name.lower().replace(' ', '_').replace('-', '_')
+
+        # 1. Exclude columns whose name matches any exclusion pattern
+        if any(excl in col_lower for excl in FORECAST_EXCLUDE):
+            logger.debug("Forecast skip (exclude pattern): %s", col_name)
+            return False
+
+        # 2. Exclude sequential-integer pseudo-IDs.
+        # Strategy: a column is an ID when it has many unique integer values whose
+        # range is close to their count (i.e. they look like auto-increment keys).
+        # Genuine business metrics (Amount, Revenue) have a wide value range
+        # relative to their count, so they pass safely.
+        nuniq = series.nunique()
+        n = len(series)
+        if nuniq > 0.9 * n:
+            # Only reject if the values look sequential (range ≈ count)
+            try:
+                numeric_series = pd.to_numeric(series, errors='coerce').dropna()
+                value_range = float(numeric_series.max() - numeric_series.min())
+                if value_range > 0 and (value_range / nuniq) < 10:
+                    # Values are tightly packed integers → looks like an ID sequence
+                    logger.debug("Forecast skip (sequential-integer ID): %s", col_name)
+                    return False
+            except Exception:
+                pass
+
+        # 3. Exclude near-constant columns (std < 0.001)
+        if series.std() < 0.001:
+            logger.debug("Forecast skip (near-zero variance): %s", col_name)
+            return False
+
+        return True
 
     def _detect_time_series(self, df: pd.DataFrame, types: Dict[str, str]) -> Tuple[str, str]:
         date_cols = [c for c, t in types.items() if t == "datetime"]
@@ -151,7 +225,7 @@ class ForecastAgent(BaseAgent):
                 ts_df.index = pd.to_datetime(ts_df.index, errors="coerce")
             
             # Drop rows that failed to parse as dates (e.g. if column contains mixed text)
-            ts_df = ts_df.dropna(subset=[ts_df.index.name]) if ts_df.index.name else ts_df.dropna()
+            ts_df = ts_df[ts_df.index.notnull()].dropna()
             
             if len(ts_df) < 8:
                 return None
@@ -216,6 +290,10 @@ class ForecastAgent(BaseAgent):
                     ss_res = np.sum(residuals**2)
                     ss_tot = np.sum((y_raw - np.mean(y_raw))**2)
                     r2 = float(1 - (ss_res / (ss_tot + 1e-9)))
+                    
+                    # Determine trend direction from forecasted trend
+                    hw_slope = y_future[-1] - y_future[0]
+                    direction = "increasing" if hw_slope > 0.0001 else "decreasing" if hw_slope < -0.0001 else "stable"
                     
                 except Exception as hw_err:
                     logger.warning(f"Holt-Winters failed for {metric}, falling back: {hw_err}")
@@ -282,10 +360,12 @@ class ForecastAgent(BaseAgent):
             return {
                 "dates_hist": ts_resampled.index.strftime('%Y-%m-%d').tolist(),
                 "values_hist": y_raw.tolist(),
+                "values_smoothed": y_smoothed.tolist(),
                 "dates_forecast": [d.strftime('%Y-%m-%d') for d in future_dates],
                 "values_forecast": y_future.tolist(),
                 "lower_bound": (y_future - ci).tolist(),
                 "upper_bound": (y_future + ci).tolist(),
+                "slope": float(slope),
                 "r2": float(r2),
                 "volatility_index": volatility_index,
                 "seasonality_detected": seasonality_detected,
@@ -294,9 +374,62 @@ class ForecastAgent(BaseAgent):
                 "forecast_model_type": model_type,
                 "interpretation": interpretation
             }
+
             
         except Exception as e:
             logger.warning(f"Adaptive Forecast failed for {metric}: {e}")
+            return None
+
+    def forecast_multivariate(self, df: pd.DataFrame, columns: List[str], periods: int = 10) -> Optional[Dict[str, Dict[str, Any]]]:
+        """
+        Generates joint multivariate forecasts using Vector Autoregression (VAR).
+        """
+        from statsmodels.tsa.vector_ar.var_model import VAR
+        
+        # Keep only the columns selected and drop rows with NaNs
+        sub_df = df[columns].dropna()
+        if len(sub_df) < 30:
+            logger.warning("Multivariate VAR forecast requires at least 30 data points.")
+            return None
+            
+        try:
+            # Detect lag order automatically or cap at 5
+            maxlags = min(5, len(sub_df) // (len(columns) + 1))
+            if maxlags < 1:
+                maxlags = 1
+                
+            model = VAR(sub_df)
+            fitted = model.fit(maxlags=maxlags, ic='aic')
+            
+            # Forecast with interval
+            lag_order = fitted.k_ar
+            last_values = sub_df.values[-lag_order:]
+            
+            # forecast_interval returns (forecast, lower, upper)
+            fc, lower, upper = fitted.forecast_interval(last_values, steps=periods)
+            
+            # Calculate R2 manually or use getattr
+            rsquared_vals = getattr(fitted, "rsquared", None)
+            results = {}
+            for idx, col in enumerate(columns):
+                # Calculate simple R-squared if not available
+                r2_val = 0.0
+                if rsquared_vals is not None:
+                    if isinstance(rsquared_vals, dict):
+                        r2_val = float(rsquared_vals.get(col, 0.0))
+                    elif isinstance(rsquared_vals, (list, np.ndarray)):
+                        r2_val = float(rsquared_vals[idx])
+                results[col] = {
+                    "forecast": fc[:, idx].tolist(),
+                    "lower": lower[:, idx].tolist(),
+                    "upper": upper[:, idx].tolist(),
+                    "history": sub_df[col].values.tolist(),
+                    "r2": r2_val,
+                    "k_ar": lag_order
+                }
+            return results
+        except Exception as e:
+            logger.error(f"Multivariate VAR forecast failed: {e}", exc_info=True)
             return None
 
     def simulate_scenario(self, df: pd.DataFrame, metric: str, driver_factor: float) -> float:

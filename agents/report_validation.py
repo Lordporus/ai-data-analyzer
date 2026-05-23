@@ -97,6 +97,23 @@ class ReportValidationEngine:
         
         return replace(forecast, forecasts=valid_forecasts)
 
+    def validate_var_inputs(self, df: pd.DataFrame, columns: List[str]) -> bool:
+        """
+        Validates whether the selected columns and dataset are suitable for VAR forecasting.
+        """
+        if len(columns) < 2:
+            return False
+        if len(df) < 30:
+            return False
+        for col in columns:
+            if self._is_structural_column(col):
+                return False
+            if col not in df.columns:
+                return False
+            if not pd.api.types.is_numeric_dtype(df[col]):
+                return False
+        return True
+
     # ── KPI Validation ───────────────────────────────────────────────
 
     def _validate_kpis(self, kpis: List[KPI]) -> List[KPI]:

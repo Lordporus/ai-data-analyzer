@@ -65,13 +65,24 @@ class NLQueryAgent(BaseAgent):
                 response = self.intelligence_engine.llm.generate_json(system_prompt, user_prompt)
                 
                 if response:
+                    chart_config = response.get("chart_config")
+                    # Validate that referenced columns exist in the dataframe
+                    if chart_config:
+                        x_col = chart_config.get("x")
+                        y_col = chart_config.get("y")
+                        df_cols = set(df.columns.tolist())
+                        x_valid = x_col is None or x_col in df_cols
+                        y_valid = y_col is None or (isinstance(y_col, list) and all(c in df_cols for c in y_col)) or (isinstance(y_col, str) and y_col in df_cols)
+                        if not x_valid or not y_valid:
+                            chart_config = None
                     return NLQueryResult(
                         explanation=response.get("explanation", "Analysis complete."),
-                        chart_config=response.get("chart_config"),
+                        chart_config=chart_config,
                         confidence_level="LLM"
                     )
             except Exception as e:
                 logger.warning(f"LLM interpretation failed, falling back: {e}")
+
 
         # ── Deterministic Fallback ──────────────────────────────────
         return self._execute_deterministic(query, df)

@@ -40,8 +40,10 @@ def test_nl_query_mock_execution(sample_df):
         }
     }
     
-    # Patch the generate_json method
-    agent.llm.generate_json = MagicMock(return_value=mock_response)
+    # Enable LLM mode and patch the intelligence_engine's llm client
+    agent.intelligence_engine.mode = "llm"
+    agent.intelligence_engine.llm = MagicMock()
+    agent.intelligence_engine.llm.generate_json = MagicMock(return_value=mock_response)
     
     result = agent.run({"query": "Show me sales by region", "df": sample_df})
     
@@ -62,7 +64,10 @@ def test_nl_query_invalid_column(sample_df):
         }
     }
     
-    agent.llm.generate_json = MagicMock(return_value=mock_response)
+    # Enable LLM mode and patch the intelligence_engine's llm client
+    agent.intelligence_engine.mode = "llm"
+    agent.intelligence_engine.llm = MagicMock()
+    agent.intelligence_engine.llm.generate_json = MagicMock(return_value=mock_response)
     
     result = agent.run({"query": "Show me invalid val", "df": sample_df})
     

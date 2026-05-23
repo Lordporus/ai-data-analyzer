@@ -44,15 +44,44 @@ class IngestionAgent(BaseAgent):
 
     name = "IngestionAgent"
 
-    def _execute(self, input_data: Path) -> IngestionResult:
-        file_path = Path(input_data)
-        if not file_path.exists():
-            raise FileNotFoundError(f"CSV not found: {file_path}")
+    def _ingest_chunked(self, file_path: Path, chunk_size: int = 100000) -> pd.DataFrame:
+        chunks = []
+        for chunk in pd.read_csv(file_path, chunksize=chunk_size, low_memory=False):
+            chunks.append(chunk)
+        df = pd.concat(chunks, ignore_index=True)
+        # Downsample to prevent RAM crash on Render free tier
+        from config.settings import MAX_ROWS_FULL
+        if len(df) > MAX_ROWS_FULL:
+            df = df.sample(n=MAX_ROWS_FULL, random_state=42).reset_index(drop=True)
+        return df
 
-        self._log(f"Reading {file_path.name} ({file_path.stat().st_size:,} bytes)")
+    def _execute(self, input_data: Path | pd.DataFrame) -> IngestionResult:
+        if isinstance(input_data, pd.DataFrame):
+            df = input_data
+            self._log(f"Direct DataFrame ingestion initiated")
+            file_name = "database_query"
+            file_size_bytes = 0
+        else:
+            file_path = Path(input_data)
+            if not file_path.exists():
+                raise FileNotFoundError(f"File not found: {file_path}")
 
-        # Read CSV with smart type inference
-        df = pd.read_csv(file_path, low_memory=False)
+            self._log(f"Reading {file_path.name} ({file_path.stat().st_size:,} bytes)")
+
+            # Read CSV or Excel with smart type inference
+            ext = file_path.suffix.lower()
+            if ext in (".xlsx", ".xls"):
+                df = pd.read_excel(file_path, engine="openpyxl")
+            else:
+                file_size_bytes = file_path.stat().st_size
+                if file_size_bytes > 50 * 1024 * 1024:
+                    from config.settings import CHUNK_SIZE
+                    df = self._ingest_chunked(file_path, chunk_size=CHUNK_SIZE)
+                else:
+                    df = pd.read_csv(file_path, low_memory=False)
+            file_name = file_path.name
+            file_size_bytes = file_path.stat().st_size
+
         self._log(f"Loaded {len(df):,} rows × {len(df.columns)} columns")
 
         # Detect column types
@@ -100,7 +129,7 @@ class IngestionAgent(BaseAgent):
             col_count=len(df.columns),
             duplicate_count=int(df.duplicated().sum()),
             sample_preview=df.head(5).to_dict(orient="records"),
-            file_size_bytes=file_path.stat().st_size,
+            file_size_bytes=file_size_bytes,
         )
         self._log(
             f"Schema detected — {sum(1 for v in detected_types.values() if v == 'numeric')} numeric, "

@@ -12,21 +12,21 @@ from pathlib import Path
 from fastapi import APIRouter, File, HTTPException, UploadFile
 
 from config.settings import MAX_FILE_SIZE_BYTES, OUTPUT_DIR, UPLOAD_DIR
-from orchestrator.master import MasterOrchestrator
+from utils.task_queue import run_analysis_task
 
 router = APIRouter()
 
 
 @router.post("/upload")
 async def upload_and_analyze(file: UploadFile = File(...)):
-    """Upload a CSV file and trigger the full analysis pipeline.
+    """Upload a CSV file and queue the analysis pipeline.
 
-    Returns a JSON summary with download links for all generated
-    artefacts (cleaned CSV, dashboard HTML, PDF report).
+    Returns a JSON object with job_id and status.
     """
     # ── Validate ─────────────────────────────────────────────────────
-    if not file.filename or not file.filename.lower().endswith(".csv"):
-        raise HTTPException(400, "Only CSV files are accepted.")
+    filename_lower = file.filename.lower() if file.filename else ""
+    if not file.filename or not (filename_lower.endswith(".csv") or filename_lower.endswith(".xlsx") or filename_lower.endswith(".xls")):
+        raise HTTPException(400, "Only CSV and Excel (.xlsx, .xls) files are accepted.")
 
     # ── Save upload ──────────────────────────────────────────────────
     job_id = uuid.uuid4().hex[:12]
@@ -49,35 +49,16 @@ async def upload_and_analyze(file: UploadFile = File(...)):
     except Exception as exc:
         raise HTTPException(500, f"Failed to save file: {exc}")
 
-    # ── Run pipeline ─────────────────────────────────────────────────
-    # Run the synchronous, CPU-bound pipeline in a thread executor so the
-    # FastAPI event loop is never blocked during analysis.
+    # ── Queue pipeline task ──────────────────────────────────────────
     try:
-        orchestrator = MasterOrchestrator()
-        loop = asyncio.get_event_loop()
-        pipeline = await loop.run_in_executor(
-            None, orchestrator.run, upload_path, job_output_dir
-        )
+        task = run_analysis_task.delay(str(upload_path), str(job_output_dir))
     except Exception as exc:
-        raise HTTPException(500, f"Pipeline failed: {exc}")
+        raise HTTPException(500, f"Failed to queue task: {exc}")
 
     # ── Response ─────────────────────────────────────────────────────
-    base = f"/outputs/{job_id}"
     return {
-        "job_id": pipeline.job_id,
-        "status": pipeline.status,
-        "duration_seconds": pipeline.total_duration_seconds,
-        "row_count": pipeline.ingestion.row_count if pipeline.ingestion else 0,
-        "col_count": pipeline.ingestion.col_count if pipeline.ingestion else 0,
-        "downloads": {
-            "cleaned_csv": f"{base}/cleaned_data.csv",
-            "dashboard_html": f"{base}/dashboard.html",
-            "pdf_report": f"{base}/report.pdf",
-            "markdown_report": f"{base}/report.md",
-        },
-        "recommendations": (
-            pipeline.insight.business_recommendations if pipeline.insight else []
-        ),
-        "agent_logs": pipeline.agent_logs,
-        "errors": pipeline.errors if pipeline.status == "completed" else ["Analysis failed. Please check your file and try again."],
+        "job_id": task.id,
+        "status": "queued",
+        "message": "Analysis queued successfully. Poll status to fetch results.",
+        "poll_url": f"/api/status/{task.id}"
     }

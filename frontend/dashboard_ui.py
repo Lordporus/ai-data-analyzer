@@ -540,6 +540,11 @@ def _render_strategic_analysis(insight):
     # Executive Summary
     st.info(f"**Executive Summary:** {insight.executive_summary}")
     
+    # Audit Trail / Calculation Panel
+    if getattr(insight, "audit_log", None):
+        with st.expander("ⓘ How was this calculated? (Audit Trail & Lineage)"):
+            st.json(insight.audit_log)
+    
     col1, col2 = st.columns(2)
     
     with col1:
@@ -601,29 +606,129 @@ def _render_forecast_lab(forecast, df: pd.DataFrame):
         )
         return
         
-    # 1. Config Row
-    c1, c2, c3 = st.columns([1, 2, 1])
+    # ── Advanced Multivariate VAR Setup ──────────────────────────────────
+    from agents.report_validation import ReportValidationEngine
+    val_engine = ReportValidationEngine()
+    num_cols = df.select_dtypes(include="number").columns.tolist()
+    numeric_cols = [c for c in num_cols if not val_engine._is_structural_column(c) and df[c].nunique() > 5]
+    can_use_var = len(numeric_cols) >= 2 and len(df) >= 30
     
-    with c1:
-        metric = st.selectbox(
-            "Select Metric to Forecast", 
-            options=forecast.available_metrics,
-            index=0
+    var_mode = False
+    var_results = None
+    selected_var_cols = []
+    
+    if can_use_var:
+        st.markdown("### 🎛️ Advanced Forecasting Controls")
+        var_mode = st.toggle(
+            "⚡ Advanced Mode: Joint Multivariate Forecasting (VAR)",
+            value=False,
+            help="Forecast multiple columns together using Vector Autoregression (VAR), capturing cross-column feedback loops and correlations."
         )
+        if var_mode:
+            selected_var_cols = st.multiselect(
+                "Select Variables for Joint VAR Model",
+                options=numeric_cols,
+                default=numeric_cols[:2],
+                help="Select 2 or more numeric columns to model together."
+            )
+            if len(selected_var_cols) < 2:
+                st.warning("⚠️ Please select at least 2 columns to run a multivariate VAR model.")
+                return
+                
+            with st.spinner("Fitting VAR model & projecting joint matrices..."):
+                from agents.forecast import ForecastAgent
+                agent = ForecastAgent()
+                var_results = agent.forecast_multivariate(df, selected_var_cols)
+                
+            if not var_results:
+                st.error("❌ Failed to fit joint VAR model. Check for multicollinearity (perfectly correlated columns) or missing data.")
+                return
+                
+            c1, c2, c3 = st.columns([1, 2, 1])
+            with c1:
+                metric = st.selectbox(
+                    "Select Metric to Focus Plot",
+                    options=selected_var_cols,
+                    index=0
+                )
+            with c2:
+                scenario_pct = st.slider(
+                    "Scenario Simulation: Impact Driver %",
+                    min_value=-20, max_value=20, value=0, step=1,
+                    format="%d%%",
+                    help="Simulate an increase or decrease in the underlying driver (e.g. price, volume)."
+                )
+                
+            # Construct VAR f_data
+            date_col = forecast.primary_date_col
+            period = forecast.period_type
+            
+            ts_df = df[[date_col] + selected_var_cols].dropna().sort_values(by=date_col)
+            ts_df = ts_df.set_index(date_col)
+            if not isinstance(ts_df.index, pd.DatetimeIndex):
+                ts_df.index = pd.to_datetime(ts_df.index, errors="coerce")
+            ts_df = ts_df.dropna(subset=[ts_df.index.name]) if (ts_df.index.name and ts_df.index.name in ts_df.columns) else ts_df.dropna()
+            
+            _vol_keywords = {"sales", "revenue", "count", "qty", "quantity", "total", "volume", "orders"}
+            _is_volume = any(kw in metric.lower() for kw in _vol_keywords)
+            agg_fn = "sum" if _is_volume else "mean"
+            ts_resampled = ts_df.resample(period).agg({c: agg_fn for c in selected_var_cols})
+            ts_resampled = ts_resampled.interpolate(method='linear')
+            
+            hist_dates = ts_resampled.index.strftime('%Y-%m-%d').tolist()
+            hist_values = ts_resampled[metric].values.tolist()
+            
+            periods = 10
+            last_date = ts_resampled.index[-1]
+            freq_offset = pd.tseries.frequencies.to_offset(period)
+            future_dates = [last_date + (i * freq_offset) for i in range(1, periods + 1)]
+            future_dates_str = [d.strftime('%Y-%m-%d') for d in future_dates]
+            
+            f_data = {
+                "dates_hist": hist_dates,
+                "values_hist": hist_values,
+                "dates_forecast": future_dates_str,
+                "values_forecast": var_results[metric]["forecast"],
+                "lower_bound": var_results[metric]["lower"],
+                "upper_bound": var_results[metric]["upper"],
+                "r2": var_results[metric]["r2"],
+                "forecast_model_type": "VAR (Vector Autoregression)",
+                "interpretation": {
+                    "model_type": "VAR",
+                    "confidence": "MEDIUM",
+                    "volatility_comment": "Joint multivariate lag-based correlation model.",
+                    "seasonality_comment": f"VAR model fit with lag order k={var_results[metric]['k_ar']}.",
+                    "business_summary": f"Joint multivariate forecast for '{metric}' taking feedback and cross-column interactions with {', '.join([c for c in selected_var_cols if c != metric])} into account.",
+                    "primary_risk": "Multi-variable parameter sensitivity may increase variance over long horizons.",
+                    "primary_opportunity": "Captures dynamic feedback loops that single-column models ignore.",
+                    "confidence_comment": f"Model evaluated with R² = {var_results[metric]['r2']:.4f}."
+                }
+            }
+            
+    if not var_mode:
+        # 1. Config Row
+        c1, c2, c3 = st.columns([1, 2, 1])
         
-    with c2:
-        scenario_pct = st.slider(
-            "Scenario Simulation: Impact Driver %", 
-            min_value=-20, max_value=20, value=0, step=1,
-            format="%d%%",
-            help="Simulate an increase or decrease in the underlying driver (e.g. price, volume)."
-        )
-
-    # 2. Get Forecast Data
-    f_data = forecast.get_forecast(metric)
-    if not f_data:
-        st.warning(f"No statistical model could be derived for the selected metric '{metric}'.")
-        return
+        with c1:
+            metric = st.selectbox(
+                "Select Metric to Forecast", 
+                options=forecast.available_metrics,
+                index=0
+            )
+            
+        with c2:
+            scenario_pct = st.slider(
+                "Scenario Simulation: Impact Driver %", 
+                min_value=-20, max_value=20, value=0, step=1,
+                format="%d%%",
+                help="Simulate an increase or decrease in the underlying driver (e.g. price, volume)."
+            )
+    
+        # 2. Get Forecast Data
+        f_data = forecast.get_forecast(metric)
+        if not f_data:
+            st.warning(f"No statistical model could be derived for the selected metric '{metric}'.")
+            return
 
     # 3. Apply Scenario Logic (Simple scaling)
     # If scenario_pct is +10%, we scale future values by 1.10
@@ -715,39 +820,90 @@ def _render_forecast_lab(forecast, df: pd.DataFrame):
     
     st.plotly_chart(fig, use_container_width=True)
 
+    # Forecast Audit Trail / Model Lineage
+    if var_mode and var_results is not None:
+        with st.expander(f"ⓘ How was '{metric}' joint VAR forecast calculated? (Model Lineage)"):
+            st.json({
+                "columns_used": selected_var_cols,
+                "formula": "Vector Autoregression (VAR) Model (statsmodels.tsa.vector_ar.var_model.VAR)",
+                "threshold": f"Akaike Information Criterion (AIC) optimal lag order k={var_results[metric]['k_ar']}",
+                "method": "deterministic",
+                "result": f"Forecasted {metric} taking cross-column correlation and feed-forward lags into account (R² = {f_data['r2']:.4f})."
+            })
+    elif getattr(forecast, "audit_log", None) and metric in forecast.audit_log:
+        with st.expander(f"ⓘ How was '{metric}' forecast calculated? (Model Lineage)"):
+            st.json(forecast.audit_log[metric])
+
 
 def _render_nl_query_section(df: pd.DataFrame):
     """
     Renders the 'Ask Your Data' interface using NLQueryAgent.
+
+    Results are stored in st.session_state["nl_query_result"] so they persist
+    across Streamlit reruns (sidebar filter changes, scrolling, etc.).
+    Without this, the result disappears on the very next script rerun because
+    the button state resets to False and the inline render block is skipped.
     """
     # Dynamic import to avoid circular dependency
     from agents.nl_query import NLQueryAgent
+
+    # Initialise persistent state slots
+    if "nl_query_result" not in st.session_state:
+        st.session_state["nl_query_result"] = None
+    if "nl_query_last_query" not in st.session_state:
+        st.session_state["nl_query_last_query"] = ""
 
     with st.expander("💬 Ask a question about this data", expanded=True):
         col1, col2 = st.columns([4, 1])
         with col1:
             query = st.text_input(
-                "Query", 
+                "Query",
                 placeholder="e.g. 'Show me the trend of Sales over time' or 'Which Region has the highest Profit?'",
-                label_visibility="collapsed"
+                label_visibility="collapsed",
+                key="nl_query_input",
             )
         with col2:
-            analyze_btn = st.button("Analyze", type="primary", use_container_width=True)
+            analyze_btn = st.button("Analyze", type="primary", use_container_width=True, key="nl_analyze_btn")
 
+        # Clear stored result when the user types a new query
+        if query != st.session_state["nl_query_last_query"]:
+            st.session_state["nl_query_result"] = None
+            st.session_state["nl_query_last_query"] = query
+
+        # Run the agent and store result in session_state
         if analyze_btn and query:
-            with st.spinner("Analyzing..."):
-                agent = NLQueryAgent()
-                result = agent.run({"query": query, "df": df})
-                
-                if result.error:
-                    st.error(result.error)
-                    if result.explanation:
-                        st.info(result.explanation)
-                else:
-                    st.success(result.explanation)
-                    
-                    if result.chart_config:
-                        _render_dynamic_chart(df, result.chart_config)
+            with st.spinner("Analyzing your question..."):
+                try:
+                    agent = NLQueryAgent()
+                    nl_result = agent.run({"query": query, "df": df})
+                    st.session_state["nl_query_result"] = {
+                        "error": nl_result.error,
+                        "explanation": nl_result.explanation,
+                        "chart_config": nl_result.chart_config,
+                        "confidence_level": nl_result.confidence_level,
+                    }
+                except Exception as exc:
+                    st.session_state["nl_query_result"] = {
+                        "error": str(exc),
+                        "explanation": "",
+                        "chart_config": None,
+                        "confidence_level": "error",
+                    }
+
+        # Always render from session_state so results survive reruns
+        stored = st.session_state.get("nl_query_result")
+        if stored:
+            if stored.get("error"):
+                st.error(stored["error"])
+                if stored.get("explanation"):
+                    st.info(stored["explanation"])
+            else:
+                confidence = stored.get("confidence_level", "")
+                badge = "🤖 AI" if confidence == "LLM" else "📐 Deterministic"
+                st.success(f"{badge} — {stored['explanation']}")
+
+                if stored.get("chart_config"):
+                    _render_dynamic_chart(df, stored["chart_config"])
 
 
 def _render_dynamic_chart(df: pd.DataFrame, config: Dict[str, Any]):

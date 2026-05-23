@@ -34,8 +34,9 @@ def sample_data():
 
 def test_kpi_calculation(sample_data):
     agent = InsightAgent()
-    agent.llm.provider = "mock" # Enable LLM path
-    agent.llm.generate_json = MagicMock(return_value={})
+    agent.intelligence_engine.mode = "mock"  # Stays in deterministic path; just exercises execute
+    agent.intelligence_engine.llm = MagicMock()
+    agent.intelligence_engine.llm.generate_json = MagicMock(return_value={})
     
     result = agent._execute(sample_data)
     
@@ -49,8 +50,9 @@ def test_kpi_calculation(sample_data):
 
 def test_trend_detection(sample_data):
     agent = InsightAgent()
-    agent.llm.provider = "mock"
-    agent.llm.generate_json = MagicMock(return_value={})
+    agent.intelligence_engine.mode = "mock"
+    agent.intelligence_engine.llm = MagicMock()
+    agent.intelligence_engine.llm.generate_json = MagicMock(return_value={})
     result = agent._execute(sample_data)
     
     # Cost is strictly increasing
@@ -60,8 +62,9 @@ def test_trend_detection(sample_data):
 
 def test_correlation_filtering(sample_data):
     agent = InsightAgent()
-    agent.llm.provider = "mock"
-    agent.llm.generate_json = MagicMock(return_value={})
+    agent.intelligence_engine.mode = "mock"
+    agent.intelligence_engine.llm = MagicMock()
+    agent.intelligence_engine.llm.generate_json = MagicMock(return_value={})
     
     # Force correlation calculation
     df = sample_data.dataframe
@@ -83,21 +86,24 @@ def test_correlation_filtering(sample_data):
 
 def test_ai_strategy_integration(sample_data):
     agent = InsightAgent()
-    agent.llm.provider = "mock" # IMPORTANT: Override default 'none'
-    
-    # Mock successful LLM response
+    # IMPORTANT: Override mode to 'llm' so generate_strategic_summary uses LLM path
+    agent.intelligence_engine.mode = "llm"
+
+    # Mock LLM response - must include the 4 keys IntelligenceEngine reads from LLM
     mock_strategy = {
         "executive_summary": "Revenue is growing but shows volatility.",
-        "risks": [{"category": "Operational", "detail": "Outlier detected in revenue."}],
-        "opportunities": ["Expand to new markets."],
-        "actions": ["Audit last transaction."],
-        "relationships": ["Revenue tracks Cost closely."]
+        "primary_risk": "High operational volatility detected.",
+        "primary_opportunity": "Expand to new markets.",
+        "confidence_comment": "Statistical confidence is within acceptable parameters."
     }
-    agent.llm.generate_json = MagicMock(return_value=mock_strategy)
-    
+    agent.intelligence_engine.llm_client = MagicMock()
+    agent.intelligence_engine.llm_client.generate_json = MagicMock(return_value=mock_strategy)
+
     result = agent._execute(sample_data)
-    
+
+    # Verify LLM executive_summary propagates into InsightResult
     assert result.executive_summary == "Revenue is growing but shows volatility."
-    assert len(result.top_risks) == 1
-    assert result.top_risks[0]["category"] == "Operational"
-    assert "Audit last transaction." in result.business_recommendations
+    # Verify at least some business recommendations exist (deterministic path)
+    assert isinstance(result.business_recommendations, list)
+    # Verify primary_risk is set from LLM response
+    assert result.primary_risk == "High operational volatility detected."

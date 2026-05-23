@@ -14,7 +14,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Callable
 
 import pandas as pd
 
@@ -79,6 +79,10 @@ class PipelineResult:
             "recommendations": (
                 self.insight.business_recommendations if self.insight else []
             ),
+            "audit_logs": {
+                "insights": self.insight.audit_log if self.insight else {},
+                "forecasts": self.forecast.audit_log if self.forecast else {},
+            },
             "errors": self.errors,
         }
 
@@ -87,8 +91,9 @@ class MasterOrchestrator:
     """Execute the full Ingestion → Cleaning → Repair → Insight →
     Dashboard → Report pipeline and return all artefacts."""
 
-    def run(self, csv_path: str | Path, output_dir: str | Path) -> PipelineResult:
-        csv_path = Path(csv_path)
+    def run(self, csv_path: str | Path | pd.DataFrame, output_dir: str | Path, branding: Optional[Dict[str, Any]] = None, progress_callback: Optional[Callable[[str, float], None]] = None, dataset_name: Optional[str] = None) -> PipelineResult:
+        if not isinstance(csv_path, pd.DataFrame):
+            csv_path = Path(csv_path)
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -98,12 +103,29 @@ class MasterOrchestrator:
 
         try:
             # ── 1) Ingestion ─────────────────────────────────────────
+            if progress_callback:
+                progress_callback("Ingesting data...", 0.05)
             ingestion_agent = IngestionAgent()
             ingestion_result: IngestionResult = ingestion_agent.run(csv_path)
+            
+            # Handle large datasets by downsampling for stable downstream processing
+            from config.settings import MAX_ROWS_FULL
+            if ingestion_result.row_count > MAX_ROWS_FULL:
+                logger.info(
+                    "Ingested dataset has %d rows, exceeding MAX_ROWS_FULL (%d). "
+                    "Downsampling to avoid downstream memory/performance issues.",
+                    ingestion_result.row_count, MAX_ROWS_FULL
+                )
+                ingestion_result.dataframe = ingestion_result.dataframe.sample(
+                    n=MAX_ROWS_FULL, random_state=42
+                ).reset_index(drop=True)
+                
             result.ingestion = ingestion_result
             result.agent_logs.append(self._log_entry(ingestion_agent))
 
             # ── 2) Data Quality BEFORE cleaning ──────────────────────
+            if progress_callback:
+                progress_callback("Assessing data quality...", 0.15)
             dq_before_agent = DataQualityAgent()
             quality_before: DataQualityResult = dq_before_agent.run({
                 "dataframe": ingestion_result.dataframe,
@@ -113,18 +135,24 @@ class MasterOrchestrator:
             result.agent_logs.append(self._log_entry(dq_before_agent))
 
             # ── 3) Cleaning ──────────────────────────────────────────
+            if progress_callback:
+                progress_callback("Cleaning & deduplicating...", 0.30)
             cleaning_agent = CleaningAgent()
             cleaning_result: CleaningResult = cleaning_agent.run(ingestion_result)
             result.cleaning = cleaning_result
             result.agent_logs.append(self._log_entry(cleaning_agent))
 
             # ── 4) Repair ────────────────────────────────────────────
+            if progress_callback:
+                progress_callback("Applying intelligent repairs...", 0.45)
             repair_agent = RepairReasoningAgent()
             repair_result: RepairResult = repair_agent.run(cleaning_result)
             result.repair = repair_result
             result.agent_logs.append(self._log_entry(repair_agent))
 
             # ── 5) Data Quality AFTER cleaning ───────────────────────
+            if progress_callback:
+                progress_callback("Re-assessing quality...", 0.55)
             dq_after_agent = DataQualityAgent()
             quality_after: DataQualityResult = dq_after_agent.run({
                 "dataframe": repair_result.dataframe,
@@ -134,12 +162,16 @@ class MasterOrchestrator:
             result.agent_logs.append(self._log_entry(dq_after_agent))
 
             # ── 6) Insight ───────────────────────────────────────────
+            if progress_callback:
+                progress_callback("Generating insights...", 0.65)
             insight_agent = InsightAgent()
             insight_result: InsightResult = insight_agent.run(repair_result)
             result.insight = insight_result
             result.agent_logs.append(self._log_entry(insight_agent))
 
             # ── 6b) Forecast ─────────────────────────────────────────
+            if progress_callback:
+                progress_callback("Running forecast model...", 0.75)
             forecast_agent = ForecastAgent()
             forecast_result: ForecastResult = forecast_agent.run({
                 "repair": repair_result,
@@ -154,6 +186,8 @@ class MasterOrchestrator:
             result.cleaned_csv_path = str(cleaned_path)
 
             # ── 8) Dashboard ─────────────────────────────────────────
+            if progress_callback:
+                progress_callback("Building dashboard...", 0.85)
             dashboard_agent = DashboardAgent()
             dash_result: DashboardResult = dashboard_agent.run({
                 "insight": insight_result,
@@ -167,6 +201,8 @@ class MasterOrchestrator:
             result.agent_logs.append(self._log_entry(dashboard_agent))
 
             # ── 9) Report ────────────────────────────────────────────
+            if progress_callback:
+                progress_callback("Creating PDF/Markdown reports...", 0.95)
             report_agent = ReportAgent()
             report_result: ReportResult = report_agent.run({
                 "ingestion": ingestion_result,
@@ -177,6 +213,8 @@ class MasterOrchestrator:
                 "quality_before": quality_before,
                 "quality_after": quality_after,
                 "output_dir": output_dir,
+                "branding": branding,
+                "dataset_name": dataset_name,
             })
             result.report = report_result
             result.pdf_report_path = report_result.pdf_path

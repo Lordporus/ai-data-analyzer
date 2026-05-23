@@ -93,3 +93,169 @@ class TestReportAgentIsolated:
         
         assert Path(result.pdf_path).exists()
         assert Path(result.markdown_path).exists()
+
+    def test_report_generation_with_audit_logs(self):
+        # Mock Data
+        df = pd.DataFrame({
+            "Revenue": [100, 110, 120, 130, 140],
+            "Cost": [50, 55, 60, 65, 70],
+            "ID": [1, 2, 3, 4, 5]
+        })
+        
+        ingestion = IngestionResult(
+            file_size_bytes=1000,
+            row_count=5,
+            col_count=3,
+            detected_types={"Revenue": "int64", "Cost": "int64", "ID": "int64"},
+            dataframe=df
+        )
+        
+        cleaning = CleaningResult(
+            dataframe=df,
+            cleaning_log=None 
+        )
+        
+        repair = RepairResult(
+            dataframe=df,
+            detected_types={"Revenue": "int64", "Cost": "int64", "ID": "int64"}
+        )
+
+        dq_result = DataQualityResult(
+            quality_score=90.0,
+            missing_percent=0.0,
+            duplicate_percent=0.0
+        )
+        
+        insight_audit_log = {
+            "KPIs": {
+                "columns_used": ["Revenue", "Cost"],
+                "formula": "Deterministic descriptive statistics",
+                "threshold": "All non-null values included",
+                "method": "deterministic",
+                "result": "Calculated KPIs successfully."
+            }
+        }
+        
+        insight = InsightResult(
+            kpi_list=[KPI("Revenue", 100, "total"), KPI("Total Cost", 50, "total")],
+            trend_summary=[TrendInfo("Revenue", 10.0, "increasing", 0.01, 0.9)],
+            correlation_matrix=pd.DataFrame({"Revenue": [1.0, 0.9], "Cost": [0.9, 1.0]}, index=["Revenue", "Cost"]),
+            business_recommendations=["Increase revenue", "Decrease cost"],
+            executive_summary="Executive Summary text.",
+            top_risks=["High risk"],
+            top_opportunities=["High growth"],
+            dataframe=df,
+            detected_types={"Revenue": "int64", "Cost": "int64", "ID": "int64"},
+            audit_log=insight_audit_log
+        )
+        
+        forecast_audit_log = {
+            "Revenue": {
+                "columns_used": ["Revenue"],
+                "formula": "OLS Linear Regression",
+                "threshold": "Trend extrapolated over future index",
+                "method": "deterministic",
+                "result": "Forecast generated successfully."
+            }
+        }
+        
+        forecast = ForecastResult(
+            is_time_series=True,
+            forecasts={"Revenue": {"values_hist": [100, 110], "values_forecast": [120, 130]}},
+            audit_log=forecast_audit_log
+        )
+        
+        agent = ReportAgent()
+        input_data = {
+            "ingestion": ingestion,
+            "cleaning": cleaning,
+            "repair": repair,
+            "insight": insight,
+            "forecast": forecast,
+            "quality_before": dq_result,
+            "quality_after": dq_result,
+            "output_dir": TEST_OUTPUT
+        }
+        
+        result = agent._execute(input_data)
+        
+        assert Path(result.pdf_path).exists()
+        assert Path(result.markdown_path).exists()
+
+    def test_report_generation_with_branding(self):
+        # Mock Data
+        df = pd.DataFrame({
+            "Revenue": [100, 110, 120, 130, 140],
+            "Cost": [50, 55, 60, 65, 70],
+            "ID": [1, 2, 3, 4, 5]
+        })
+        
+        ingestion = IngestionResult(
+            file_size_bytes=1000,
+            row_count=5,
+            col_count=3,
+            detected_types={"Revenue": "int64", "Cost": "int64", "ID": "int64"},
+            dataframe=df
+        )
+        
+        cleaning = CleaningResult(
+            dataframe=df,
+            cleaning_log=None 
+        )
+        
+        repair = RepairResult(
+            dataframe=df,
+            detected_types={"Revenue": "int64", "Cost": "int64", "ID": "int64"}
+        )
+
+        dq_result = DataQualityResult(
+            quality_score=90.0,
+            missing_percent=0.0,
+            duplicate_percent=0.0
+        )
+        
+        insight = InsightResult(
+            kpi_list=[KPI("Revenue", 100, "total"), KPI("Total Cost", 50, "total")],
+            trend_summary=[TrendInfo("Revenue", 10.0, "increasing", 0.01, 0.9)],
+            correlation_matrix=pd.DataFrame({"Revenue": [1.0, 0.9], "Cost": [0.9, 1.0]}, index=["Revenue", "Cost"]),
+            business_recommendations=["Increase revenue", "Decrease cost"],
+            executive_summary="Executive Summary text.",
+            top_risks=["High risk"],
+            top_opportunities=["High growth"],
+            dataframe=df,
+            detected_types={"Revenue": "int64", "Cost": "int64", "ID": "int64"}
+        )
+        
+        forecast = ForecastResult(
+            is_time_series=True,
+            forecasts={"Revenue": {"values_hist": [100, 110], "values_forecast": [120, 130]}}
+        )
+        
+        # Dict branding input
+        agent = ReportAgent()
+        branding_dict = {
+            "company_name": "Acme Corp",
+            "primary_color": "#FF5733",
+            "logo_path": None,
+            "analyst_name": "Wile E. Coyote"
+        }
+        
+        input_data = {
+            "ingestion": ingestion,
+            "cleaning": cleaning,
+            "repair": repair,
+            "insight": insight,
+            "forecast": forecast,
+            "quality_before": dq_result,
+            "quality_after": dq_result,
+            "output_dir": TEST_OUTPUT,
+            "branding": branding_dict
+        }
+        
+        result = agent._execute(input_data)
+        
+        assert Path(result.pdf_path).exists()
+        assert Path(result.markdown_path).exists()
+        assert agent.branding.company_name == "Acme Corp"
+        assert agent.branding.primary_color == "#FF5733"
+        assert agent.branding.analyst_name == "Wile E. Coyote"

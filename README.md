@@ -1,288 +1,156 @@
 # AI Data Analyzer
 
+**Transform Raw Data into Executive Intelligence in 15 Seconds.**
 
-# Take a Look
-https://ai-data-analyst-59zk.onrender.com/
-
-**A Deterministic-First, Multi-Agent Data Intelligence System**
+[View Live App](https://ai-data-analyst-59zk.onrender.com/)
 
 ---
 
 ## Overview
 
-Most data analysis workflows remain manual, repetitive, and inconsistent. Analysts spend disproportionate time on tasks that should be automated: parsing file schemas, handling missing values, detecting column types, computing summary statistics, building charts, and formatting reports. The outputs vary depending on who performs the work and when.
+AI Data Analyzer is a professional SaaS platform that eliminates the friction of manual data analysis. It is a modular, multi-agent analytics pipeline that takes raw data (CSV, XLSX, SQL databases) and produces a complete analytical deliverable: cleaned data, statistical insights, time-series forecasts, an interactive dashboard, and a white-labeled, executive-grade PDF report.
 
-AI Data Analyzer eliminates this friction. It is a modular, multi-agent analytics pipeline that takes a raw CSV file as input and produces a complete analytical deliverable: cleaned data, statistical insights, time-series forecasts, an interactive dashboard, and an executive-grade PDF report. The system handles every step from ingestion to final output without requiring manual intervention.
-
-The system is built for reliability. Every core computation is deterministic. There are no required API keys, no paid service dependencies, and no opaque inference steps. Outputs are reproducible, auditable, and consistent across runs. LLM-powered features exist as optional enhancements that degrade gracefully when unavailable.
-
-This project is designed for data analysts, engineering teams evaluating automated pipelines, and portfolio reviewers looking for evidence of production-grade systems thinking.
+Designed for business owners, consultants, and data analysts, the system handles every step from ingestion to final output deterministically and autonomously.
 
 ---
 
-## Architecture Overview
+## Key Features
 
-The system follows a modular multi-agent design. Each agent is a self-contained processing unit with a single responsibility, a typed input, and a typed output. Agents do not share state. The orchestrator invokes them in strict sequence, collects their results, and assembles a unified pipeline output consumed by both the frontend dashboard and the report generator.
-
-### Pipeline Flow
-
-```
-CSV Upload
-    |
-    v
-IngestionAgent         Schema detection, type inference, metadata extraction
-    |
-    v
-CleaningAgent          Null imputation, duplicate removal, type coercion
-    |
-    v
-RepairAgent            Structural normalization, column renaming, encoding fixes
-    |
-    v
-DataQualityAgent       Quality scoring across completeness, consistency, validity
-    |
-    v
-InsightAgent           KPIs, trend analysis, correlation matrix, risk detection
-    |
-    v
-ForecastAgent          Time-series forecasting with adaptive model selection
-    |
-    v
-ReportValidationEngine Statistical filtering, NaN sanitization, derived column suppression
-    |
-    v
-ReportAgent            Executive PDF report generation
-```
-
-### Design Principles
-
-The architecture is governed by three rules:
-
-1. **Deterministic by default.** Every agent produces the same output for the same input. No stochastic steps exist in the critical path.
-2. **AI as augmentation, not dependency.** LLM features are confined to optional layers (natural language querying, narrative enhancement). The system produces complete output without them.
-3. **Guardrail-based reporting.** A dedicated validation engine filters every insight before it reaches the report. Weak statistical findings are suppressed rather than presented.
+- **Multi-Format Data Ingestion**: Upload CSV and Excel files, or connect directly to live databases (PostgreSQL, BigQuery, Snowflake).
+- **Automated Data Hygiene**: Smart handling of missing values, duplicates, mixed-type columns, and automatic schema inference.
+- **Business-Aware Insights**: Generates actionable, plain-English executive summaries. Automatically identifies key trends, anomalies, and non-obvious correlations—completely free of corporate jargon.
+- **Adaptive Forecasting**: Univariate and multivariate (VAR/ARIMAX) time-series forecasting. Automatically selects the best statistical model (Linear vs. Holt-Winters) based on data characteristics.
+- **Consulting-Grade PDF Reports**: Instantly generates branded PDF reports featuring custom logos, color schemes, and an executive summary.
+- **Scheduled Deliveries**: Set up automated, recurring email reports using SendGrid.
+- **Interactive Dashboard**: Explore your data through a dynamic Streamlit interface with real-time filters, live progress tracking, and session history.
+- **Scalable Architecture**: Distributed task queue processing (Celery + Redis) for non-blocking concurrent user execution.
+- **Team Workspaces**: Persistent analysis history and team organization via Supabase Auth and Cloudflare R2 storage.
 
 ---
 
-## Core Features
+## Screenshots
 
-### Data Handling
-
-The ingestion pipeline detects column types using strict matching thresholds, handles mixed-type columns, and normalizes datetime formats. The cleaning agent imputes missing numeric values with column medians and categorical values with column modes. Duplicates are removed deterministically. All transformations are logged for auditability.
-
-### Insight Engine
-
-The InsightAgent computes key performance indicators, linear trend analysis with R-squared and p-value metrics, pairwise correlation matrices, and risk/opportunity classification. Insights are deterministic and computed using scipy and numpy. No LLM is involved in statistical analysis.
-
-### Forecasting (Adaptive)
-
-The forecast engine implements adaptive model selection between linear regression and Holt-Winters exponential smoothing based on detected data characteristics. See the dedicated section below for technical details.
-
-### Executive Reporting
-
-The ReportAgent generates PDF reports using ReportLab Platypus flowables. Reports follow a consulting-grade structure with metric-aware narrative commentary that adapts to the type of metric being discussed (volume, efficiency, dispersion). Raw statistical values are translated into business language.
-
-### Validation and Guardrails
-
-The ReportValidationEngine acts as a quality gate between analysis and presentation. It suppresses derived columns, filters trivial correlations (r > 0.999), drops forecasts with NaN values, and enforces minimum data thresholds. This prevents misleading or statistically weak findings from appearing in final outputs.
-
-### Optional AI Enhancements
-
-When configured with an LLM API key, the system enables two additional features:
-
-- Natural language querying of uploaded datasets
-- Enhanced narrative generation in report summaries
-
-Both features are optional. If the LLM call fails or is unavailable, the system falls back to template-based output with no functional loss.
+*(Placeholder for Screenshots)*
+- **Landing Page & Onboarding**
+- **Interactive Dashboard & Charts**
+- **Executive PDF Report Cover & Content**
+- **Settings & Branding Panel**
 
 ---
 
-## Forecasting Engine
+## Tech Stack
 
-The ForecastAgent implements a two-tier model selection strategy designed for reliability over complexity.
+The architecture is built for performance, modularity, and deterministic reliability:
 
-### Model Selection
-
-The engine evaluates each numeric time-series column and selects a model based on the data's statistical profile:
-
-- If autocorrelation analysis confirms a seasonal pattern (correlation > 0.5 at any lag, dominant lag >= 2, and sufficient data length), the engine uses Holt-Winters exponential smoothing with additive trend and seasonality.
-- Otherwise, it defaults to linear regression with confidence intervals derived from residual standard deviation.
-
-This is a deliberate design choice. Complex models applied to insufficient data produce unreliable projections. The engine prefers a well-supported simple model over a poorly-supported complex one.
-
-### Confidence Grading
-
-Each forecast receives a confidence grade based on R-squared, p-value, and volatility index:
-
-| Grade | Criteria |
-|:------|:---------|
-| High | R-squared > 0.7, p-value < 0.05, low volatility |
-| Moderate | R-squared 0.4 to 0.7, mixed statistical support |
-| Low | R-squared < 0.4 or high residual variance |
-
-### Suppression
-
-If fewer than 8 historical data points exist, the forecast is not generated. This threshold is enforced at both the ForecastAgent and the ReportValidationEngine. Forecasts containing NaN values are also dropped before reaching the report layer.
+- **Frontend**: Streamlit
+- **Backend API**: FastAPI, Uvicorn
+- **Task Queue & Async Execution**: Celery, Redis
+- **Data Processing**: Pandas, NumPy, SciPy, Scikit-Learn, Statsmodels, OpenPyXL
+- **Visualization**: Plotly
+- **PDF Generation**: ReportLab (Platypus Flowables)
+- **Database & Auth**: Supabase (PostgreSQL), Cloudflare R2
+- **Email & Scheduling**: SendGrid, APScheduler
+- **AI Integration (Optional)**: Google Gemini API (or any configured LLM via integration layer)
 
 ---
 
-## Running the Project
+## Local Setup Instructions
 
 ### Prerequisites
+- Python 3.11+
+- Redis server (for task queuing)
 
-- Python 3.10 or later
-- pip
-
-### Install Dependencies
+### 1. Clone and Install
 
 ```bash
+git clone https://github.com/Lordporus/ai-data-analyzer.git
+cd ai-data-analyzer
 pip install -r requirements.txt
 ```
 
-### Start the Interactive Dashboard
-
-```bash
-streamlit run frontend/app.py --server.port 8501
-```
-
-The dashboard will be accessible at `http://localhost:8501`.
-
-### Start the API Server (Optional)
-
-```bash
-uvicorn api.main:app --reload --port 8000
-```
-
-The API will be accessible at `http://localhost:8000`. API documentation is auto-generated at `/docs`.
-
----
-
-## Environment Configuration
-
-Copy the example environment file:
-
+### 2. Environment Configuration
+Copy the template and fill in your variables:
 ```bash
 cp .env.example .env
 ```
 
-The system works without any environment variables set. All core features (ingestion, cleaning, analysis, forecasting, reporting, dashboard) function in fully deterministic mode without API keys.
-
-To enable optional LLM features, configure the following in `.env`:
-
-```
-LLM_PROVIDER=gemini
-LLM_API_KEY=your-api-key
-LLM_MODEL=gemini-flash-latest
-LLM_ENDPOINT=https://generativelanguage.googleapis.com/v1beta/openai/chat/completions
+### 3. Start the Application
+To run all services (Redis, Celery, FastAPI, Streamlit) simultaneously using the provided startup script:
+```bash
+bash start.sh
 ```
 
-If these are not set, the system operates in deterministic mode with no degradation in core functionality.
-
----
-
-## Project Structure
-
-```
-ai-data-analyzer/
-├── agents/                  Core agent implementations
-│   ├── base.py              Base agent interface
-│   ├── ingestion.py         Schema detection and type inference
-│   ├── cleaning.py          Data cleaning and null handling
-│   ├── repair.py            Structural repair and normalization
-│   ├── data_quality.py      Quality scoring engine
-│   ├── insight.py           Statistical analysis and KPI computation
-│   ├── forecast.py          Adaptive forecasting engine
-│   ├── report_validation.py Validation quality gate
-│   ├── report.py            PDF report generation
-│   └── nl_query.py          Natural language query agent (optional)
-├── api/                     FastAPI backend and route handlers
-├── config/                  Application configuration and settings
-├── docs/                    Technical documentation
-├── frontend/                Streamlit dashboard interface
-├── orchestrator/            Pipeline sequencing and coordination
-├── optional/                Optional feature modules (auth, exports)
-├── tests/                   Test suite
-├── utils/                   Shared utilities (LLM client, helpers)
-├── Dockerfile               Container image definition
-├── docker-compose.yml       Multi-service orchestration
-├── requirements.txt         Python dependencies
-├── .env.example             Environment variable template
-└── .gitignore               Git exclusion rules
-```
-
----
-
-## Engineering Decisions
-
-### Deterministic-First Approach
-
-Every agent in the core pipeline produces identical outputs for identical inputs. This was a deliberate choice over a fully AI-driven architecture. Reproducibility is non-negotiable for production analytics. When a stakeholder asks why a number appears in a report, the answer must trace back to specific data and logic, not to a probabilistic model that may produce different output on the next run.
-
-### Statistical Filtering
-
-The validation engine enforces strict thresholds before any insight reaches the report. Correlations above 0.999 are suppressed (likely derived columns). Forecasts below 8 data points are dropped. Constant-value columns are excluded from KPI computation. These rules are not configurable at runtime. Quality gates should not be relaxable by users who may not understand the statistical implications.
-
-### Executive-Grade PDF Layout
-
-Reports are generated using ReportLab Platypus flowables, not manual canvas positioning. This ensures consistent pagination, proper text wrapping, and reliable rendering across document lengths. The narrative engine adapts commentary based on metric type rather than using generic phrasing.
-
-### Modular Design
-
-Each agent is independently testable, replaceable, and extensible. The orchestrator treats agents as interchangeable units with typed contracts. This design supports future scaling without requiring architectural changes.
-
-### Production Hardening & Resiliency
-
-To transition this system into a hardened enterprise-grade solution, several critical enhancements were introduced:
-- **FastAPI Thread-Safety & Asynchrony**: Offloaded synchronous CPU-bound data operations (e.g. Pandas analysis, forecasting, PDF generation) from the FastAPI event loop into separate OS threads using `asyncio.to_thread`. This eliminates event loop blocking and allows the backend to handle high volumes of concurrent requests.
-- **Strict File Sandboxing**: Implemented path traversal safeguards on all data uploads. The API now strictly extracts base filenames and strips traversal patterns to prevent malicious file manipulation outside the designated `uploads/` directory.
-- **Python 3.12 Alignment**: Resolved model schema conflicts (specifically duplicate field definitions in orchestrator schemas) to ensure runtime stability and smooth deployment on modern Python 3.12 runtimes.
-- **Pandas Integrity & Downstream Accuracy**: Corrected null counting behavior during clean steps. Applying conditional mappings prevents Pandas `.astype(str)` from turning actual missing values into literal `"nan"` strings, preserving true data profile metrics.
-- **Dynamic Time Series Downsampling**: Refactored the forecasting pipeline to automatically apply context-sensitive aggregation (like `.sum()` or `.mean()`) depending on the nature of the data metric, preventing incorrect calculations for rate or efficiency fields.
-- **Boundary Safeguards**: Added validation checks in both the frontend and API layers to detect completely empty files or all-NaN datasets prior to processing, masking detailed internal runtime errors to avoid exposing stack traces to clients.
-
----
-
-## Limitations
-
-This section documents known constraints honestly.
-
-- The system processes data in-memory using Pandas. It is suitable for datasets under approximately one million rows. Larger datasets may require chunked processing, which is not yet implemented.
-- There is no distributed execution layer. The pipeline runs on a single node.
-- Forecasting supports univariate time-series only. Multivariate models (VAR, ARIMAX) are not yet available.
-- The LLM-enhanced narrative layer depends on external API availability and adds latency to report generation.
-- The system does not currently support real-time streaming data. It operates in batch mode.
-
----
-
-## Future Roadmap
-
-The following items represent planned technical enhancements:
-
-- Multivariate forecasting support using VAR and ARIMAX models for cross-metric prediction.
-- Chunked ingestion to handle datasets exceeding available memory.
-- Persistent storage layer to replace file-based output management for multi-user deployments.
-- Custom report templates allowing users to define layout and branding through configuration files.
-- Distributed agent execution using task queues for horizontal scaling.
-- Streaming data support for real-time analytical pipelines.
-
----
-
-## Deployment
-
-### Docker
-
-Build and run both services with Docker Compose:
-
+Alternatively, you can run them via Docker:
 ```bash
 docker-compose up --build
 ```
 
-This starts the FastAPI backend on port 8000 and the Streamlit frontend on port 8501. Upload and output directories are mounted as persistent volumes.
-
-### Local
-
-No additional infrastructure is required. The system runs entirely on localhost with file-based persistence.
+Access the dashboard at `http://localhost:8501`.
 
 ---
 
-This project is provided as-is for portfolio and demonstration purposes.
+## Environment Variables
+
+For full functionality, configure the following in your `.env` file. Note that core deterministic features work without LLM keys.
+
+```env
+# Server
+PORT=8501
+API_HOST=0.0.0.0
+API_PORT=8000
+
+# LLM Configuration (Optional)
+LLM_PROVIDER=gemini
+LLM_API_KEY=your-api-key
+
+# Database, Auth & Storage (Supabase & Cloudflare R2)
+SUPABASE_URL=your-supabase-url
+SUPABASE_ANON_KEY=your-anon-key
+R2_ENDPOINT=your-r2-endpoint
+R2_ACCESS_KEY=your-r2-access-key
+R2_SECRET_KEY=your-r2-secret-key
+R2_BUCKET=your-bucket-name
+R2_PUBLIC_URL=your-r2-public-url
+
+# Task Queue
+REDIS_URL=redis://localhost:6379/0
+
+# Scheduled Reports
+SENDGRID_API_KEY=your-sendgrid-api-key
+SCHEDULER_ENABLED=true
+```
+
+---
+
+## Render Deployment Instructions
+
+The application is optimized for deployment on Render as a Dockerized Web Service.
+
+1. **Prepare External Services**:
+   - Provision a free **Supabase** project for Auth and Database.
+   - Provision a free **Cloudflare R2** bucket for persistent file storage.
+   - Provision an external **Redis** instance (e.g., Upstash) since Render's Free Tier does not include Redis. Update `REDIS_URL` accordingly.
+
+2. **Deploy to Render**:
+   - Create a new **Web Service** in the Render Dashboard.
+   - Connect your GitHub repository.
+   - Set the Environment to `Docker`.
+   - Select the `Free` Instance Type.
+
+3. **Configure Environment Variables**:
+   In the Render dashboard, add the following variables:
+   - `PYTHON_VERSION` = `3.11.0`
+   - `PORT` = `8501`
+   - `SUPABASE_URL` = `<your-supabase-url>`
+   - `SUPABASE_ANON_KEY` = `<your-supabase-key>`
+   - `REDIS_URL` = `<your-external-redis-url>`
+   - `LLM_PROVIDER` = `gemini`
+   - `LLM_API_KEY` = `<your-gemini-key>`
+
+4. **Deploy**:
+   - Click "Manual Deploy" -> "Deploy latest commit".
+   - The provided `start.sh` script will automatically spin up the background workers and the Streamlit frontend within the single container.
+
+---
+
+**AI Data Analyzer** — Built for reliability, transparency, and actionable intelligence.

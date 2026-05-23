@@ -15,6 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from api.routes.upload import router as upload_router
 from api.routes.download import router as download_router
 from api.routes.enterprise import router as enterprise_router
+from api.routes.status import router as status_router
 from config.settings import BRAND_NAME, OUTPUT_DIR, is_llm_enabled
 
 # ── Logging ──────────────────────────────────────────────────────────
@@ -53,6 +54,7 @@ app.mount("/outputs", StaticFiles(directory=str(OUTPUT_DIR)), name="outputs")
 
 # ── Routes ───────────────────────────────────────────────────────────
 app.include_router(upload_router, prefix="/api", tags=["Upload & Analyze"])
+app.include_router(status_router, prefix="/api", tags=["Job Status"])
 app.include_router(download_router, prefix="/api", tags=["Downloads"])
 app.include_router(enterprise_router, prefix="/api/v1", tags=["Enterprise API"])
 
@@ -61,3 +63,24 @@ app.include_router(enterprise_router, prefix="/api/v1", tags=["Enterprise API"])
 async def health_check():
     """Health-check endpoint."""
     return {"status": "healthy", "service": BRAND_NAME}
+
+
+@app.get("/api/mock-stream", tags=["Mock Stream"])
+async def mock_stream():
+    """Generates random mock time-series sales data for real-time analysis testing."""
+    import random
+    from datetime import datetime, timedelta
+    now = datetime.now()
+    records = []
+    # Generate 50 points of historical data
+    for i in range(50):
+        timestamp = (now - timedelta(minutes=(50 - i) * 30)).strftime("%Y-%m-%d %H:%M:%S")
+        records.append({
+            "Date": timestamp,
+            "Sales": round(100 + i * 2.5 + random.uniform(-15, 15), 2),
+            "Quantity": random.randint(1, 10),
+            "Store_ID": random.choice([1, 2, 3]),
+            "Category": random.choice(["Electronics", "Apparel", "Home"])
+        })
+    return records
+

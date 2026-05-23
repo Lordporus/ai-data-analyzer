@@ -1,6 +1,28 @@
 version: "3.9"
 
 services:
+  redis:
+    image: "redis:alpine"
+    container_name: analyzer-redis
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+
+  celery_worker:
+    build: .
+    container_name: analyzer-worker
+    volumes:
+      - ./uploads:/app/uploads
+      - ./outputs:/app/outputs
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+    env_file:
+      - .env
+    command: celery -A utils.task_queue.celery_app worker --loglevel=info
+    depends_on:
+      - redis
+    restart: unless-stopped
+
   api:
     build: .
     container_name: analyzer-api
@@ -9,9 +31,13 @@ services:
     volumes:
       - ./uploads:/app/uploads
       - ./outputs:/app/outputs
+    environment:
+      - REDIS_URL=redis://redis:6379/0
     env_file:
       - .env
     command: uvicorn api.main:app --host 0.0.0.0 --port 8000
+    depends_on:
+      - redis
     restart: unless-stopped
 
   frontend:
@@ -22,9 +48,12 @@ services:
     volumes:
       - ./uploads:/app/uploads
       - ./outputs:/app/outputs
+    environment:
+      - REDIS_URL=redis://redis:6379/0
     env_file:
       - .env
     command: streamlit run frontend/app.py --server.port 8501 --server.address 0.0.0.0
     depends_on:
       - api
+      - redis
     restart: unless-stopped

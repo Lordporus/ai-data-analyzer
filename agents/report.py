@@ -9,6 +9,7 @@ a pure flowable-based story.
 from __future__ import annotations
 
 import logging
+import os
 import threading
 import copy
 import warnings
@@ -55,6 +56,7 @@ from agents.forecast import ForecastResult
 from config.settings import BRAND_COLOR, BRAND_NAME
 
 from agents.report_validation import ReportValidationEngine
+from utils.branding import BrandConfig
 
 # ── Font Registration ────────────────────────────────────────────────
 try:
@@ -199,6 +201,20 @@ class ReportAgent(BaseAgent):
             # 4. Data Sanitization (Consulting-Grade Cleanup)
             s_insight, s_forecast = self._sanitize_data(insight, forecast)
 
+            # 4.5 Load Branding Configuration
+            branding_input = input_data.get("branding")
+            if not branding_input:
+                self.branding = BrandConfig()
+            elif isinstance(branding_input, dict):
+                self.branding = BrandConfig(**branding_input)
+            elif isinstance(branding_input, BrandConfig):
+                self.branding = branding_input
+            else:
+                self.branding = BrandConfig()
+
+            # Dynamically update style colors with the custom brand color
+            self.sty.kpi_value.textColor = colors.HexColor(self.branding.primary_color)
+
             # 5. Rendering Engine (Structured Section Flow)
             doc = SimpleDocTemplate(
                 str(pdf_path),
@@ -210,6 +226,26 @@ class ReportAgent(BaseAgent):
             )
             
             story = []
+            
+            # Resolve dataset name: prefer explicit input, then ingestion.file_name, else safe default
+            raw_name = (
+                input_data.get("dataset_name")
+                or (getattr(self.ingestion, "file_name", None))
+                or "Uploaded Dataset"
+            )
+            self.dataset_name = os.path.splitext(os.path.basename(str(raw_name)))[0]
+                
+            self.exec_summary = getattr(s_insight, 'executive_summary', "Dataset overview and strategic findings.")
+            if not self.exec_summary:
+                self.exec_summary = "Dataset overview and strategic findings."
+            # Guarantee no jargon reaches the PDF regardless of which engine produced the text
+            self.exec_summary = self._remove_jargon(self.exec_summary)
+            s_insight.executive_summary = self.exec_summary
+            
+            # The cover page is drawn directly on the canvas via onFirstPage
+            # We add a spacer and a page break so the main story content starts on page 2.
+            story.append(Spacer(1, 1))
+            story.append(PageBreak())
             
             # Standard section flow with requested spacing
             self._build_executive_summary(story, s_insight)
@@ -230,12 +266,12 @@ class ReportAgent(BaseAgent):
             self._build_strategy(story, s_insight)
             
             story.append(Spacer(1, 24))
-            self._build_appendix(story, s_insight)
+            self._build_appendix(story, s_insight, s_forecast)
 
             # 6. Finalize
             doc.build(
                 story,
-                onFirstPage=self._draw_header_footer,
+                onFirstPage=lambda canvas, doc: self._build_cover_page(canvas, doc, self.branding),
                 onLaterPages=self._draw_header_footer
             )
             self._generate_markdown(md_path, self.ingestion, s_insight, self.q_after)
@@ -247,6 +283,38 @@ class ReportAgent(BaseAgent):
             logger.error(f"Report Engine Failure: {e}", exc_info=True)
             raise e
     
+    def _remove_jargon(self, text: str) -> str:
+        """
+        Final safety net: replaces corporate jargon with plain-English equivalents
+        before any text reaches the PDF.  Mirrors the JARGON_BLACKLIST in insight.py.
+        """
+        if not text:
+            return text
+        import re
+        replacements = [
+            ("systemic volatility",          "sales variation"),
+            ("variance drivers",             "key factors"),
+            ("operational throughput",       "business performance"),
+            ("unmodeled volatility",         "unexpected changes"),
+            ("downside exposure",            "risk"),
+            ("metric stabilization",         "improving consistency"),
+            ("performance sensitivities",    "performance factors"),
+            ("strategic leverage",           "growth opportunity"),
+            ("risk vectors",                 "risk areas"),
+            ("modeled variances",            "key differences"),
+            ("structural drift",             "gradual decline"),
+            ("organizational throughput",    "business output"),
+            ("performance drift",            "performance change"),
+            ("directional persistency",      "consistent trend"),
+            ("lateral consistency",          "stable performance"),
+            ("operational variability risk", "operational risk"),
+            ("structural contraction",       "decline"),
+            ("progressive expansion",        "growth"),
+        ]
+        for old, new in replacements:
+            text = re.sub(re.escape(old), new, text, flags=re.IGNORECASE)
+        return text
+
     def _sanitize_data(self, insight, forecast):
         """Creates sanitized copies for rendering ensuring no NaN/Inf or weak signals appear."""
         s_insight = copy.deepcopy(insight)
@@ -306,28 +374,94 @@ class ReportAgent(BaseAgent):
         return s_insight, s_forecast
 
     def _draw_header_footer(self, canvas, doc):
-        """Standardizes layout across all pages using canvas primitives."""
+        """Standardizes layout across all pages using canvas primitives with custom branding."""
+        if doc.page == 1:
+            # Draw brand color accent bar at the very top of the cover page
+            canvas.saveState()
+            canvas.setFillColor(colors.HexColor(self.branding.primary_color))
+            canvas.rect(0, doc.pagesize[1] - 15, doc.pagesize[0], 15, fill=1, stroke=0)
+            canvas.restoreState()
+            return
+            
         canvas.saveState()
         
-        # Header
-        canvas.setFont(FONT_HEAD, 10)
-        canvas.setStrokeColor(MUTED_TEXT)
-        canvas.setLineWidth(0.5)
+        # Header Brand Accent Line
+        canvas.setFillColor(colors.HexColor(self.branding.primary_color))
+        canvas.rect(60, doc.pagesize[1] - 32, doc.pagesize[0] - 120, 3, fill=1, stroke=0)
         
-        # Left: Report Title
-        canvas.drawString(60, doc.pagesize[1] - 40, f"{BRAND_NAME} Analytics")
+        # Header Text
+        canvas.setFont(FONT_HEAD, 9)
+        canvas.setFillColor(PRIMARY_TEXT)
+        canvas.drawString(60, doc.pagesize[1] - 45, f"{self.branding.company_name} Analytics")
         
-        # Right: Strategic Intelligence Report
-        canvas.drawRightString(doc.pagesize[0] - 60, doc.pagesize[1] - 40, "Strategic Intelligence Report")
+        canvas.setFont(FONT_BODY, 9)
+        canvas.setFillColor(MUTED_TEXT)
+        canvas.drawRightString(doc.pagesize[0] - 60, doc.pagesize[1] - 45, "Strategic Intelligence Report")
         
         # Separator Line
-        canvas.line(60, doc.pagesize[1] - 45, doc.pagesize[0] - 60, doc.pagesize[1] - 45)
+        canvas.setStrokeColor(colors.HexColor("#E5E7EB"))
+        canvas.setLineWidth(0.5)
+        canvas.line(60, doc.pagesize[1] - 50, doc.pagesize[0] - 60, doc.pagesize[1] - 50)
         
         # Footer
-        canvas.setFont(FONT_BODY, 9)
-        canvas.drawCentredString(doc.pagesize[0] / 2, 30, f"Page {doc.page}")
+        canvas.setFont(FONT_BODY, 8)
+        canvas.setFillColor(MUTED_TEXT)
+        # Left footer: Brand Custom Footer Text + optional Analyst Name
+        footer_left = self.branding.footer_text
+        if self.branding.analyst_name:
+            footer_left += f" | Prepared by: {self.branding.analyst_name}"
+        canvas.drawString(60, 30, footer_left)
+        
+        # Right footer: Page Number
+        canvas.drawRightString(doc.pagesize[0] - 60, 30, f"Page {doc.page}")
         
         canvas.restoreState()
+
+    def _build_cover_page(self, canvas, doc, brand_config):
+        from reportlab.lib.colors import HexColor
+        # Full-width color header bar
+        canvas.setFillColor(HexColor(brand_config.primary_color))
+        canvas.rect(0, doc.height - 80, doc.width + 100, 80, fill=1, stroke=0)
+        
+        # Company logo (if provided)
+        if brand_config.logo_path and Path(brand_config.logo_path).exists():
+            canvas.drawImage(brand_config.logo_path, 40, doc.height - 70, width=120, height=50)
+        
+        # Title
+        canvas.setFillColor(HexColor("#FFFFFF"))
+        canvas.setFont("Helvetica-Bold", 28)
+        canvas.drawString(40, doc.height - 140, "Data Analysis Report")
+        
+        # Dataset name
+        canvas.setFillColor(HexColor("#1a1a2e"))
+        canvas.setFont("Helvetica-Bold", 18)
+        canvas.drawString(40, doc.height - 190, f"Dataset: {self.dataset_name}")
+        
+        # Date + Analyst
+        canvas.setFont("Helvetica", 12)
+        canvas.setFillColor(HexColor("#666666"))
+        canvas.drawString(40, doc.height - 220, f"Generated: {datetime.now().strftime('%B %d, %Y')}")
+        canvas.drawString(40, doc.height - 240, f"Prepared by: {brand_config.analyst_name or brand_config.company_name}")
+        
+        # Divider line
+        canvas.setStrokeColor(HexColor(brand_config.primary_color))
+        canvas.setLineWidth(2)
+        canvas.line(40, doc.height - 260, doc.width - 40, doc.height - 260)
+        
+        # Executive Summary box
+        canvas.setFillColor(HexColor("#f8f9fa"))
+        canvas.roundRect(40, doc.height - 380, doc.width - 80, 100, 8, fill=1, stroke=0)
+        canvas.setFillColor(HexColor("#1a1a2e"))
+        canvas.setFont("Helvetica-Bold", 11)
+        canvas.drawString(55, doc.height - 295, "EXECUTIVE SUMMARY")
+        canvas.setFont("Helvetica", 10)
+        # First insight as exec summary
+        canvas.drawString(55, doc.height - 315, self.exec_summary[:120] + "...")
+        
+        # Footer
+        canvas.setFillColor(HexColor("#666666"))
+        canvas.setFont("Helvetica", 9)
+        canvas.drawString(40, 30, f"Confidential — {brand_config.company_name} — {brand_config.footer_text}")
 
     def _format_metric_name(self, name: str) -> str:
         """Sanitizes and formats column names for professional output."""
@@ -728,7 +862,7 @@ class ReportAgent(BaseAgent):
 
         story.append(PageBreak())
 
-    def _build_appendix(self, story, insight):
+    def _build_appendix(self, story, insight, forecast=None):
         story.append(Paragraph("Technical Metadata", self.sty.title))
         story.append(Spacer(1, 12))
         
@@ -743,6 +877,80 @@ class ReportAgent(BaseAgent):
                 story.append(Spacer(1, 12))
         else:
              story.append(Paragraph("No corrective cleaning maneuvers required.", self.sty.body))
+
+        # Add Calculation Methodology page
+        story.append(PageBreak())
+        story.append(Paragraph("Calculation Methodology", self.sty.title))
+        story.append(Spacer(1, 12))
+        story.append(Paragraph(
+            "This appendix details the mathematical formulas, threshold controls, and statistical lineage for "
+            "every KPI, trend, relationship, anomaly, and forecast in this report.",
+            self.sty.body
+        ))
+        story.append(Spacer(1, 12))
+        
+        style_header = ParagraphStyle(
+            "AppendixTableHeader",
+            parent=self.sty.body,
+            fontName=FONT_HEAD,
+            fontSize=9,
+            leading=11,
+            textColor=colors.white,
+            alignment=TA_LEFT
+        )
+        style_cell = ParagraphStyle(
+            "AppendixTableCell",
+            parent=self.sty.body,
+            fontName=FONT_BODY,
+            fontSize=8,
+            leading=10,
+            textColor=SECONDARY_TEXT,
+            alignment=TA_LEFT
+        )
+        
+        table_rows = [
+            [
+                Paragraph("<b>Category / Metric</b>", style_header),
+                Paragraph("<b>Formula / Methodology</b>", style_header),
+                Paragraph("<b>Threshold / Controls</b>", style_header),
+                Paragraph("<b>Result / Lineage</b>", style_header)
+            ]
+        ]
+        
+        has_audit_logs = False
+        
+        if getattr(insight, "audit_log", None):
+            for category, log in insight.audit_log.items():
+                has_audit_logs = True
+                table_rows.append([
+                    Paragraph(f"<b>{category}</b>", style_cell),
+                    Paragraph(str(log.get("formula", "N/A")), style_cell),
+                    Paragraph(str(log.get("threshold", "N/A")), style_cell),
+                    Paragraph(str(log.get("result", "N/A")), style_cell)
+                ])
+                
+        if forecast and getattr(forecast, "audit_log", None):
+            for metric, log in forecast.audit_log.items():
+                has_audit_logs = True
+                table_rows.append([
+                    Paragraph(f"<b>Forecast: {metric}</b>", style_cell),
+                    Paragraph(str(log.get("formula", "N/A")), style_cell),
+                    Paragraph(str(log.get("threshold", "N/A")), style_cell),
+                    Paragraph(str(log.get("result", "N/A")), style_cell)
+                ])
+                
+        if has_audit_logs:
+            t = Table(table_rows, colWidths=[100, 125, 125, 125])
+            t.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), BRAND_RGB),
+                ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+                ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+                ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor("#E5E7EB")),
+                ('PADDING', (0, 0), (-1, -1), 6),
+            ]))
+            story.append(t)
+        else:
+            story.append(Paragraph("No audit lineage logs available for this analysis.", self.sty.body))
 
     # ── Charting & Helpers ──────────────────────────────────────────
 

@@ -23,6 +23,34 @@ from utils.intelligence_engine import IntelligenceEngine
 
 logger = logging.getLogger(__name__)
 
+# Columns that are identifiers / system artefacts — never useful for insights
+EXCLUDE_PATTERNS = [
+    'index', 'id', 'unnamed', 'row', 'serial',
+    'sr_no', 'sl_no', 'cust_id', 'order_id',
+]
+
+# Words/phrases that must NEVER appear in any user-facing output
+JARGON_BLACKLIST = [
+    "systemic volatility",
+    "variance drivers",
+    "performance sensitivities",
+    "strategic leverage",
+    "operational throughput",
+    "unmodeled volatility",
+    "downside exposure",
+    "metric stabilization",
+    "risk vectors",
+    "modeled variances",
+    "structural drift",
+    "organizational throughput",
+    "performance drift",
+    "directional persistency",
+    "lateral consistency",
+    "operational variability risk",
+    "structural contraction",
+    "progressive expansion",
+]
+
 
 @dataclass
 class KPI:
@@ -73,6 +101,7 @@ class InsightResult:
     
     detected_types: Dict[str, str] = field(default_factory=dict)
     dataframe: pd.DataFrame = field(repr=False, default_factory=pd.DataFrame)
+    audit_log: Dict[str, Any] = field(default_factory=dict)
 
 
 class InsightAgent(BaseAgent):
@@ -87,6 +116,10 @@ class InsightAgent(BaseAgent):
     def _execute(self, input_data: RepairResult) -> InsightResult:
         df = input_data.dataframe.copy()
         types = input_data.detected_types
+
+        # Filter out identifier/system columns before ALL downstream analysis
+        df = self._filter_business_columns(df)
+
         num_cols = [c for c, t in types.items() if t == "numeric" and c in df.columns]
         cat_cols = [c for c, t in types.items() if t == "categorical" and c in df.columns]
         date_cols = [c for c, t in types.items() if t == "datetime" and c in df.columns]
@@ -117,26 +150,99 @@ class InsightAgent(BaseAgent):
                 cv = abs(df[col].std() / mean)
                 max_vol = max(max_vol, cv)
 
+        # ── Build rich data context so LLM / deterministic engine uses real names ──
+        # Collect top categorical values (e.g. ["Amazon", "Myntra"] for Channel)
+        cat_top_values: Dict[str, List[str]] = {}
+        for col in cat_cols[:8]:
+            top_vals = df[col].value_counts().head(5).index.tolist()
+            cat_top_values[col] = [str(v) for v in top_vals]
+
+        # Collect key numeric stats for the most important columns
+        numeric_stats: Dict[str, Dict] = {}
+        for col in num_cols[:6]:
+            numeric_stats[col] = {
+                "mean": round(float(df[col].mean()), 2),
+                "sum": round(float(df[col].sum()), 2),
+                "min": round(float(df[col].min()), 2),
+                "max": round(float(df[col].max()), 2),
+            }
+
+        # Sample rows so LLM sees actual category values in context
+        sample_rows = df.head(5).to_dict(orient="records")
+
         # Build context for IntelligenceEngine
         context = {
             "trend_direction": primary_trend,
             "confidence_level": primary_conf,
             "volatility_index": round(max_vol, 3),
             "seasonality_detected": False,
-            "forecast_model_type": "Linear"
+            "forecast_model_type": "Linear",
+            # Rich dataset context
+            "dataset_columns": list(df.columns),
+            "numeric_columns": num_cols,
+            "categorical_columns": cat_cols,
+            "categorical_top_values": cat_top_values,
+            "numeric_stats": numeric_stats,
+            "row_count": len(df),
+            "sample_rows": sample_rows,
+            # Jargon control
+            "jargon_blacklist": JARGON_BLACKLIST,
         }
 
         # Generate Strategic Narrative via Abstraction Layer
         narrative = self.intelligence_engine.generate_strategic_summary(context)
         
-        # Fallback recommendations if AI fails or is disabled
-        legacy_recs = self._generate_recommendations(
+        # Data-aware recommendations — use actual column/category names
+        legacy_recs = self._generate_data_aware_recommendations(
             df, num_cols, cat_cols, trends, anomalies, kpis
+        )
+
+        # Post-process: scrub any remaining generic terms
+        narrative["executive_summary"] = self._clean_insight_text(
+            narrative["executive_summary"], df
         )
 
         self._log(
             f"Generated {len(kpis)} KPIs. Intelligence Mode: {self.intelligence_engine.mode.upper()}"
         )
+
+        audit_log = {
+            "KPIs": {
+                "columns_used": num_cols + cat_cols,
+                "formula": "Deterministic descriptive statistics (mean, median, std, min, max, value_counts)",
+                "threshold": "All non-null values included; top categorical categories capped at 5",
+                "method": "deterministic",
+                "result": f"Calculated {len(kpis)} KPIs successfully across all detected numeric and categorical columns."
+            },
+            "Trends": {
+                "columns_used": num_cols + date_cols,
+                "formula": "Linear Ordinary Least Squares (OLS) Regression (scipy.stats.linregress)",
+                "threshold": "p-value < 0.05 for statistical significance (direction: increasing/decreasing); p-value >= 0.05 flagged as stable",
+                "method": "deterministic",
+                "result": f"Detected {len(trends)} trends. Granular sorting/monotonic alignment based on date column: {date_cols[0] if date_cols else 'None'}."
+            },
+            "Correlations": {
+                "columns_used": num_cols,
+                "formula": "Pearson Product-Moment Correlation Matrix (pandas.DataFrame.corr)",
+                "threshold": "r-value > 0.7 considered meaningful; ratio variance checked to filter out trivial deterministic/derived columns",
+                "method": "deterministic",
+                "result": f"Identified {len(filtered_corrs)} key non-obvious relationships after filtering out derived ratios."
+            },
+            "Anomalies": {
+                "columns_used": num_cols,
+                "formula": "Standard Score / Z-Score (scipy.stats.zscore)",
+                "threshold": "Absolute Z-Score > 3.0 (data points exceeding 3 standard deviations from mean)",
+                "method": "deterministic",
+                "result": f"Flagged anomalies across {len(anomalies)} numeric columns."
+            },
+            "Strategic Narrative": {
+                "columns_used": ["executive_summary", "primary_risk", "primary_opportunity"],
+                "formula": "Rule-based synthesis & generative heuristic expansion via IntelligenceEngine",
+                "threshold": f"LLM Integration active (provider: {self.intelligence_engine.mode})",
+                "method": "llm-enhanced" if self.intelligence_engine.mode != "none" else "deterministic",
+                "result": f"Strategic analysis synthesized with volatility index {round(max_vol, 3)} and {primary_conf} confidence."
+            }
+        }
 
         return InsightResult(
             kpi_list=kpis,
@@ -151,7 +257,75 @@ class InsightAgent(BaseAgent):
             key_relationships=filtered_corrs,
             detected_types=types,
             dataframe=df,
+            audit_log=audit_log,
         )
+
+    # ── Business Column Filter ────────────────────────────────────────
+    def _filter_business_columns(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Drops identifier/system columns (index, id, serial numbers, etc.)
+        before any statistical analysis so they never pollute insights.
+        """
+        cols_to_keep = [
+            col for col in df.columns
+            if not any(
+                pattern in col.lower().replace(' ', '_').replace('-', '_')
+                for pattern in EXCLUDE_PATTERNS
+            )
+        ]
+        dropped = set(df.columns) - set(cols_to_keep)
+        if dropped:
+            logger.debug("InsightAgent: dropped identifier columns: %s", dropped)
+        return df[cols_to_keep]
+
+    def _clean_insight_text(self, text: str, df: pd.DataFrame) -> str:
+        """
+        Replaces generic placeholder terms and JARGON_BLACKLIST words with
+        plain-English equivalents. Applied as the final post-processing step
+        on every user-facing text field.
+        """
+        if not text:
+            return text
+
+        # Pick the first non-generic column as the representative business term
+        meaningful_cols = [
+            c for c in df.columns
+            if not any(p in c.lower() for p in EXCLUDE_PATTERNS)
+        ]
+        rep_col = meaningful_cols[0] if meaningful_cols else "data"
+
+        # Full replacement map: jargon → plain English
+        replacements = [
+            # Index placeholder terms
+            ('"index"',                    f'"{rep_col}"'),
+            ("'index'",                    f"'{rep_col}'"),
+            ('the index',                  f'the {rep_col}'),
+            ('Index is',                   f'{rep_col} is'),
+            # JARGON_BLACKLIST replacements (must mirror report.py _remove_jargon)
+            ('systemic volatility',        'sales variation'),
+            ('variance drivers',           'key factors'),
+            ('operational throughput',     'business performance'),
+            ('unmodeled volatility',       'unexpected changes'),
+            ('downside exposure',          'risk'),
+            ('metric stabilization',       'improving consistency'),
+            ('performance sensitivities',  'performance factors'),
+            ('strategic leverage',         'growth opportunity'),
+            ('risk vectors',               'risk areas'),
+            ('modeled variances',          'key differences'),
+            ('structural drift',           'gradual decline'),
+            ('organizational throughput',  'business output'),
+            ('performance drift',          'performance change'),
+            ('directional persistency',    'consistent trend'),
+            ('lateral consistency',        'stable performance'),
+            ('operational variability risk', 'operational risk'),
+            ('structural contraction',     'decline'),
+            ('progressive expansion',      'growth'),
+        ]
+        for old, new in replacements:
+            # Case-insensitive replacement
+            import re
+            text = re.sub(re.escape(old), new, text, flags=re.IGNORECASE)
+        return text
 
     # ── KPIs ─────────────────────────────────────────────────────────
     def _compute_kpis(
@@ -291,8 +465,8 @@ class InsightAgent(BaseAgent):
 
 
 
-    # ── Legacy Recommendations (Fallback) ────────────────────────────
-    def _generate_recommendations(
+    # ── Data-Aware Recommendations ─────────────────────────────────────
+    def _generate_data_aware_recommendations(
         self,
         df: pd.DataFrame,
         num_cols: List[str],
@@ -301,52 +475,81 @@ class InsightAgent(BaseAgent):
         anomalies: List[AnomalyFlag],
         kpis: List[KPI],
     ) -> List[str]:
+        """
+        Generates specific, actionable recommendations using ACTUAL column names
+        and top category values from the dataset — never generic placeholders.
+        """
         recs: List[str] = []
 
-        # High-variance columns
-        for col in num_cols:
-            cv = df[col].std() / (df[col].mean() + 1e-9)
-            if abs(cv) > 1.0:
-                recs.append(
-                    f"⚠️ '{col}' has very high variability (CV={cv:.2f}). "
-                    "Investigate causes — may indicate data quality issues or "
-                    "genuine business volatility."
-                )
+        # 1. Categorical distribution insights (e.g. "Amazon leads with 42% of orders")
+        for col in cat_cols[:4]:
+            vc = df[col].value_counts()
+            if len(vc) < 2:
+                continue
+            top_name = str(vc.index[0])
+            top_pct = round(100 * vc.iloc[0] / vc.sum(), 1)
+            second_name = str(vc.index[1]) if len(vc) > 1 else None
+            second_pct = round(100 * vc.iloc[1] / vc.sum(), 1) if len(vc) > 1 else None
 
-        # Trending columns
+            msg = f"📊 **{col}**: '{top_name}' leads with {top_pct}% of records."
+            if second_name and second_pct:
+                gap = round(top_pct - second_pct, 1)
+                msg += f" '{second_name}' follows at {second_pct}% ({gap}pp gap). Focus resources on the top performer."
+            recs.append(msg)
+
+        # 2. Numeric column highlights (e.g. "Amount: total ₹2.05Cr, avg ₹662")
+        for col in num_cols[:3]:
+            col_data = df[col].dropna()
+            if col_data.empty:
+                continue
+            total = col_data.sum()
+            avg = col_data.mean()
+            # Format large numbers compactly
+            def _fmt(n):
+                if abs(n) >= 1_000_000:
+                    return f"{n/1_000_000:.2f}M"
+                if abs(n) >= 1_000:
+                    return f"{n/1_000:.1f}K"
+                return f"{n:.2f}"
+            recs.append(
+                f"💰 **{col}**: total = {_fmt(total)}, avg per record = {_fmt(avg)}, "
+                f"range = {_fmt(float(col_data.min()))}–{_fmt(float(col_data.max()))}. "
+                "Use this as a baseline for goal-setting."
+            )
+
+        # 3. Trending columns — name the column explicitly, skip slope jargon
         for t in trends:
+            direction_icon = "📈" if t.direction == "increasing" else "📉"
             if t.direction == "increasing":
-                recs.append(
-                    f"📈 '{t.column}' is trending upward (slope={t.slope:.4f}). "
-                    "Monitor for growth opportunities or capacity planning."
-                )
+                action = "Monitor for growth opportunities and plan capacity."
             elif t.direction == "decreasing":
-                recs.append(
-                    f"📉 '{t.column}' is trending downward (slope={t.slope:.4f}). "
-                    "Investigate root causes — may signal declining performance."
-                )
+                action = "Investigate root causes and take corrective action."
+            else:
+                continue
+            recs.append(f"{direction_icon} **{t.column}** is trending {t.direction}. {action}")
 
-        # Anomalies
+        # 4. Anomaly alerts — name the column, give count
         for a in anomalies:
             if a.count > 0:
                 recs.append(
-                    f"🔍 '{a.column}' has {a.count} anomalous records (z-score > 3). "
-                    "Review these data points for errors or significant events."
+                    f"🔍 **{a.column}** has {a.count} anomalous records (z-score > 3). "
+                    "Review these for data entry errors or significant business events."
                 )
 
-        # Strong correlations
+        # 5. Cross-column correlation insights
         if len(num_cols) >= 2:
             corr = df[num_cols].corr()
             for i, c1 in enumerate(num_cols):
                 for c2 in num_cols[i + 1:]:
                     r = corr.loc[c1, c2]
                     if abs(r) > 0.8:
+                        direction = "move together" if r > 0 else "move inversely"
                         recs.append(
-                            f"🔗 Strong correlation ({r:.2f}) between '{c1}' and "
-                            f"'{c2}'. Consider whether one can predict the other."
+                            f"🔗 Strong link (r={r:.2f}): **{c1}** and **{c2}** {direction}. "
+                            f"Improving {c1} is likely to impact {c2}."
                         )
 
         if not recs:
-            recs.append("✅ Dataset looks healthy — no major issues detected.")
+            recs.append("✅ Dataset looks healthy — no major anomalies or concerning trends detected.")
 
         return recs

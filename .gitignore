@@ -3,6 +3,7 @@
 # ==============================
 __pycache__/
 *.py[cod]
+*.pyc
 *.pyo
 *.pyd
 *.egg-info/
@@ -28,6 +29,10 @@ htmlcov/
 # Environment Variables
 # ==============================
 .env
+.env.local
+*.env
+auth/session_store.json
+
 
 # ==============================
 # IDE / Editor
@@ -69,3 +74,11 @@ test_results.txt
 # ==============================
 *.tmp
 *.bak
+.agent/
+
+IMPLEMENTATION_PLAN.md
+IMPLEMENTATION_PLAN2.md
+DESIGN_AND_MONETIZATIONPLAN.md
+BUGS_FIX_BEFORE_DEPLOYMENT.md
+CLEANUP_BEFORE_PUSH.md
+MASTER_SYSTEM_WALKTHROUGH.md
