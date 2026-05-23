@@ -41,6 +41,8 @@ from reportlab.platypus import (
     HRFlowable,
 )
 from reportlab.lib.enums import TA_CENTER, TA_LEFT
+from reportlab.graphics.shapes import Drawing
+from reportlab.graphics.charts.barcharts import VerticalBarChart
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 
@@ -76,15 +78,18 @@ except Exception as e:
     FONT_BODY = "Helvetica"
     FONT_ITALIC = "Helvetica-Oblique"
 
-# ── SaaS Color System ────────────────────────────────────────────────
-PRIMARY_TEXT = colors.HexColor("#111827")
-SECONDARY_TEXT = colors.HexColor("#374151")
-MUTED_TEXT = colors.HexColor("#6B7280")
-BRAND_COLOR_HEX = colors.HexColor("#4F46E5") # Primary SaaS Brand Color
+# ── Premium Color System ─────────────────────────────────────────────
+# Core palette: deep purple + violet accent + soft lavender background
+PRIMARY_COLOR   = colors.HexColor("#2D1B69")   # Deep purple — headers, cover bar
+ACCENT_COLOR    = colors.HexColor("#7C3AED")   # Violet accent — section titles, dividers
+BG_BOX_LIGHT    = colors.HexColor("#F8F7FF")   # Light lavender — card backgrounds
 
-# --- CONFIGURATION (Legacy Compatibility) ---
+PRIMARY_TEXT    = colors.HexColor("#111827")
+SECONDARY_TEXT  = colors.HexColor("#374151")
+MUTED_TEXT      = colors.HexColor("#6B7280")
+BRAND_COLOR_HEX = PRIMARY_COLOR                 # Keep legacy alias
 
-# Strict Brand Colors
+# Legacy compat
 _bc = BRAND_COLOR.lstrip("#")
 try:
     if len(_bc) == 6:
@@ -96,17 +101,17 @@ try:
     else:
         BRAND_RGB = colors.HexColor(BRAND_COLOR)
 except Exception:
-    BRAND_RGB = colors.HexColor("#6C63FF")
+    BRAND_RGB = PRIMARY_COLOR
 
-COLOR_DARK_BLUE = colors.HexColor("#0f172a") # Slate 900
-COLOR_TEXT_BODY = colors.HexColor("#334155") # Slate 700
-COLOR_TEXT_MUTED = colors.HexColor("#64748b") # Slate 500
-COLOR_BG_LIGHT = colors.HexColor("#f8fafc")  # Slate 50
+COLOR_DARK_BLUE  = colors.HexColor("#0f172a")
+COLOR_TEXT_BODY  = colors.HexColor("#334155")
+COLOR_TEXT_MUTED = colors.HexColor("#64748b")
+COLOR_BG_LIGHT   = BG_BOX_LIGHT
 
-# Impact Colors
-COLOR_GREEN = colors.HexColor("#16a34a")
+# Semantic impact colors
+COLOR_GREEN  = colors.HexColor("#16a34a")
 COLOR_YELLOW = colors.HexColor("#ca8a04")
-COLOR_RED = colors.HexColor("#dc2626")
+COLOR_RED    = colors.HexColor("#dc2626")
 
 @dataclass
 class ReportResult:
@@ -119,43 +124,46 @@ class StyleManager:
     def __init__(self):
         self.styles = getSampleStyleSheet()
         
-        # Typography Hierarchy (Modern SaaS / Consulting Standard)
+        # Typography Hierarchy — Premium Design (FIX 2)
         self.title = ParagraphStyle(
             "Title_Modern",
             fontName=FONT_HEAD, fontSize=30, leading=36,
-            textColor=PRIMARY_TEXT, spaceBefore=24, spaceAfter=16
+            textColor=PRIMARY_COLOR, spaceBefore=24, spaceAfter=16
         )
-        
+
+        # Section headers: 14pt bold deep-purple, 12pt section spacing
         self.h1 = ParagraphStyle(
             "H1_Modern",
-            fontName=FONT_SUB, fontSize=20, leading=26,
-            textColor=PRIMARY_TEXT, spaceBefore=18, spaceAfter=12
+            fontName=FONT_HEAD, fontSize=14, leading=20,
+            textColor=PRIMARY_COLOR, spaceBefore=12, spaceAfter=12
         )
-        
+
+        # Sub-headers: accent violet
         self.h2 = ParagraphStyle(
             "H2_Modern",
-            fontName=FONT_SUB, fontSize=15, leading=20,
-            textColor=SECONDARY_TEXT, spaceBefore=12, spaceAfter=8
+            fontName=FONT_SUB, fontSize=12, leading=16,
+            textColor=ACCENT_COLOR, spaceBefore=12, spaceAfter=8
         )
-        
+
+        # Body: 10pt with 14pt line spacing for better readability
         self.body = ParagraphStyle(
             "Body_Modern",
-            fontName=FONT_BODY, fontSize=11.5, leading=15,
-            textColor=SECONDARY_TEXT, spaceAfter=8, alignment=TA_LEFT
+            fontName=FONT_BODY, fontSize=10, leading=14,
+            textColor=SECONDARY_TEXT, spaceAfter=8, spaceBefore=0, alignment=TA_LEFT
         )
-        
+
         self.caption = ParagraphStyle(
             "Caption_Modern",
             fontName=FONT_ITALIC, fontSize=9, leading=12,
             textColor=MUTED_TEXT, alignment=TA_CENTER, spaceBefore=6, spaceAfter=12
         )
-        
+
         self.kpi_value = ParagraphStyle(
             "KPI_Value",
-            fontName=FONT_HEAD, fontSize=24, leading=26,
-            textColor=BRAND_COLOR_HEX, alignment=TA_CENTER
+            fontName=FONT_HEAD, fontSize=22, leading=26,
+            textColor=PRIMARY_COLOR, alignment=TA_CENTER
         )
- 
+
         self.kpi_label = ParagraphStyle(
             "KPI_Label",
             fontName=FONT_BODY, fontSize=10, leading=12,
@@ -191,7 +199,7 @@ class ReportAgent(BaseAgent):
             
             output_dir = Path(input_data["output_dir"])
             output_dir.mkdir(parents=True, exist_ok=True)
-            self.industry = self._detect_industry(self.ingestion.detected_types.keys())
+            self.industry = getattr(insight, "sector_name", None) or self._detect_industry(self.ingestion.detected_types.keys())
             
             # 3. Artifact Preparation
             self.chart_paths = self._create_charts(self.ingestion, insight, forecast, output_dir)
@@ -458,10 +466,10 @@ class ReportAgent(BaseAgent):
         # First insight as exec summary
         canvas.drawString(55, doc.height - 315, self.exec_summary[:120] + "...")
         
-        # Footer
+        # Footer — show "Confidential" only once (on later pages via branding.footer_text)
         canvas.setFillColor(HexColor("#666666"))
         canvas.setFont("Helvetica", 9)
-        canvas.drawString(40, 30, f"Confidential — {brand_config.company_name} — {brand_config.footer_text}")
+        canvas.drawString(40, 30, f"{brand_config.company_name} — {brand_config.footer_text}")
 
     def _format_metric_name(self, name: str) -> str:
         """Sanitizes and formats column names for professional output."""
@@ -522,6 +530,10 @@ class ReportAgent(BaseAgent):
             ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
         ]))
         story.append(t1)
+        story.append(Spacer(1, 16))
+
+        # Key Findings highlight box (page 2, after snapshot)
+        story.append(self._build_key_findings_box(insight))
         story.append(Spacer(1, 24))
 
         # Block 2: Primary Business Finding
@@ -663,6 +675,11 @@ class ReportAgent(BaseAgent):
             ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
         ]))
         story.append(t)
+
+        # Bar chart: top categorical column distribution
+        story.append(Spacer(1, 24))
+        self._build_bar_chart(story, insight)
+
         story.append(PageBreak())
 
     def _build_trends(self, story, insight):
@@ -1116,7 +1133,122 @@ class ReportAgent(BaseAgent):
         ]))
         return t
 
+    # ── Key Findings Box ────────────────────────────────────────────
+
+    def _build_key_findings_box(self, insight) -> Table:
+        """
+        Highlighted box with top 3 business insights.
+        Background: #F8F7FF (light lavender), border: #7C3AED (violet).
+        Placed on page 2 directly below the snapshot table.
+        """
+        KEY_BG     = colors.HexColor("#F8F7FF")
+        KEY_BORDER = colors.HexColor("#7C3AED")
+
+        title_style = ParagraphStyle(
+            "KFTitle",
+            fontName=FONT_HEAD, fontSize=11, leading=14,
+            textColor=PRIMARY_COLOR, spaceBefore=0, spaceAfter=8
+        )
+        bullet_style = ParagraphStyle(
+            "KFBullet",
+            fontName=FONT_BODY, fontSize=10, leading=14,
+            textColor=SECONDARY_TEXT, spaceBefore=3, spaceAfter=3, leftIndent=8
+        )
+
+        # Prefer business_recommendations; fall back to executive_summary sentences
+        raw_recs = insight.business_recommendations[:3] if insight.business_recommendations else []
+        if not raw_recs and insight.executive_summary:
+            sentences = insight.executive_summary.split(". ")
+            raw_recs = [s.strip() + "." for s in sentences[:3] if s.strip()]
+
+        content = [Paragraph("\U0001f4cc  KEY FINDINGS", title_style)]
+        for rec in raw_recs:
+            # Strip emoji and markdown bold for clean PDF text
+            import re as _re
+            clean = _re.sub(r'[\U00010000-\U0010ffff]|\*\*', '', rec).strip()
+            content.append(Paragraph(f"\u2022  {clean}", bullet_style))
+
+        if not raw_recs:
+            content.append(Paragraph("\u2022  No specific findings detected for this dataset.", bullet_style))
+
+        t = Table([[content]], colWidths=[inch * 6.5])
+        t.setStyle(TableStyle([
+            ('BACKGROUND',    (0, 0), (-1, -1), KEY_BG),
+            ('BOX',           (0, 0), (-1, -1), 1.5, KEY_BORDER),
+            ('LEFTPADDING',   (0, 0), (-1, -1), 16),
+            ('RIGHTPADDING',  (0, 0), (-1, -1), 16),
+            ('TOPPADDING',    (0, 0), (-1, -1), 14),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 14),
+        ]))
+        return t
+
+    # ── Bar Chart (ReportLab native) ─────────────────────────────────
+
+    def _build_bar_chart(self, story: list, insight) -> None:
+        """
+        Builds a native ReportLab VerticalBarChart for the top categorical
+        column and appends it to the story. Uses accent color #7C3AED bars.
+        Safe no-op when no categorical data is available.
+        """
+        df = getattr(insight, 'dataframe', None)
+        if df is None or df.empty:
+            return
+
+        # Pick the first categorical business column with at least 2 unique values
+        cat_col = None
+        for c in df.columns:
+            if df[c].dtype == object and self._is_business_column(c) and df[c].nunique() >= 2:
+                cat_col = c
+                break
+        if cat_col is None:
+            return
+
+        vc = df[cat_col].value_counts().head(5)
+        if vc.empty:
+            return
+
+        labels = [str(v)[:14] for v in vc.index.tolist()]
+        values = [float(v) for v in vc.values.tolist()]
+
+        story.append(Paragraph(f"Distribution by {cat_col}", self.sty.h1))
+        story.append(Spacer(1, 8))
+
+        # Drawing dimensions (fits within A4 content width ~475pt)
+        drawing = Drawing(430, 210)
+        bc = VerticalBarChart()
+        bc.x          = 45
+        bc.y          = 35
+        bc.height     = 155
+        bc.width      = 360
+        bc.data       = [values]
+        bc.strokeColor = None
+
+        # Bars
+        bc.bars[0].fillColor   = ACCENT_COLOR
+        bc.bars[0].strokeColor = None
+        bc.barSpacing          = 4
+
+        # Category axis (x)
+        bc.categoryAxis.categoryNames     = labels
+        bc.categoryAxis.labels.fontSize   = 8
+        bc.categoryAxis.labels.angle      = 20 if len(labels) > 3 else 0
+        bc.categoryAxis.labels.boxAnchor  = 'ne' if len(labels) > 3 else 'n'
+        bc.categoryAxis.strokeColor       = colors.HexColor("#D1D5DB")
+        bc.categoryAxis.visibleGrid       = False
+
+        # Value axis (y)
+        bc.valueAxis.valueMin      = 0
+        bc.valueAxis.labels.fontSize = 8
+        bc.valueAxis.strokeColor   = colors.HexColor("#D1D5DB")
+        bc.valueAxis.gridStrokeColor = colors.HexColor("#F3F4F6")
+        bc.valueAxis.visibleGrid   = True
+
+        drawing.add(bc)
+        story.append(drawing)
+        story.append(Spacer(1, 6))
+        story.append(Paragraph(f"Top 5 categories in \u2018{cat_col}\u2019 by record count", self.sty.caption))
+
     def _add_divider(self, story):
         story.append(Spacer(1, 10))
-        story.append(HRFlowable(width="100%", thickness=0.5, color=BRAND_COLOR_HEX, spaceBefore=4, spaceAfter=4))
+        story.append(HRFlowable(width="100%", thickness=0.5, color=ACCENT_COLOR, spaceBefore=4, spaceAfter=4))
         story.append(Spacer(1, 10))

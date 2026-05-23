@@ -93,6 +93,7 @@ class InsightResult:
     primary_risk: str = ""
     primary_opportunity: str = ""
     confidence_comment: str = ""
+    sector_name: str = ""
     
     # Additional metadata (Optional/Legacy support)
     top_risks: List[Dict[str, Any]] = field(default_factory=list)
@@ -254,6 +255,7 @@ class InsightAgent(BaseAgent):
             primary_risk=narrative["primary_risk"],
             primary_opportunity=narrative["primary_opportunity"],
             confidence_comment=narrative["confidence_comment"],
+            sector_name=self._detect_sector(df),
             key_relationships=filtered_corrs,
             detected_types=types,
             dataframe=df,
@@ -277,6 +279,27 @@ class InsightAgent(BaseAgent):
         if dropped:
             logger.debug("InsightAgent: dropped identifier columns: %s", dropped)
         return df[cols_to_keep]
+
+    def _detect_sector(self, df: pd.DataFrame) -> str:
+        """Infers business sector from dataset column names."""
+        col_names = [c.lower() for c in df.columns]
+        
+        # Keyword mapping
+        if any(k in c for c in col_names for k in ["complaint", "product", "issue", "response"]):
+            return "Consumer Services"
+        if any(k in c for c in col_names for k in ["revenue", "sales", "amount", "price"]):
+            return "Retail & Commerce"
+        if any(k in c for c in col_names for k in ["patient", "diagnosis", "hospital"]):
+            return "Healthcare"
+        if any(k in c for c in col_names for k in ["transaction", "balance", "loan", "mortgage"]):
+            return "Financial Services"
+            
+        # Default: first meaningful column name + "Analytics"
+        skip = {"index", "id", "unnamed", "row", "serial", "sr_no", "sl_no"}
+        for col in df.columns:
+            if col.lower().replace(" ", "_") not in skip:
+                return col.replace("_", " ").title() + " Analytics"
+        return "Business Analytics"
 
     def _clean_insight_text(self, text: str, df: pd.DataFrame) -> str:
         """

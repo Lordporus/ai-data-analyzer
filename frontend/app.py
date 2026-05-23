@@ -27,7 +27,7 @@ import pickle
 from config.settings import BRAND_NAME, BRAND_COLOR, OUTPUT_DIR, UPLOAD_DIR, is_llm_enabled, SCHEDULER_ENABLED
 from orchestrator.master import MasterOrchestrator, PipelineResult
 from agents.data_quality import score_color, risk_level
-from utils.auth import login_user, signup_user, save_session_token, load_session_token, delete_session_token
+from utils.auth import login_user, signup_user, save_session_token, load_session_token, delete_session_token, get_supabase_client
 from utils.workspace import create_organization, get_organizations, add_analysis_run, get_org_analysis_history
 from utils.storage import upload_to_r2, LOCAL_STORAGE_DIR
 
@@ -172,7 +172,47 @@ def load_sample_dataset():
 if "user" not in st.session_state:
     _saved_token = st.query_params.get("session", "")
     if _saved_token:
-        _restored_user = load_session_token(_saved_token)
+        _restored_user = None
+        _supabase_client = get_supabase_client()
+        if _supabase_client and ":::" in _saved_token:
+            try:
+                _parts = _saved_token.split(":::")
+                _access_token = _parts[0]
+                _refresh_token = _parts[1] if len(_parts) > 1 else None
+                
+                # Try getting the user using the current access token
+                _user_res = _supabase_client.auth.get_user(_access_token)
+                if _user_res and _user_res.user:
+                    _restored_user = {
+                        "id": _user_res.user.id,
+                        "email": _user_res.user.email,
+                        "type": "supabase",
+                        "access_token": _access_token,
+                        "refresh_token": _refresh_token
+                    }
+                elif _refresh_token:
+                    # Access token might have expired, try refreshing session
+                    _refresh_res = _supabase_client.auth.refresh_session(_refresh_token)
+                    if _refresh_res and _refresh_res.user and _refresh_res.session:
+                        _new_access_token = _refresh_res.session.access_token
+                        _new_refresh_token = _refresh_res.session.refresh_token
+                        _new_token_str = f"{_new_access_token}:::{_new_refresh_token}"
+                        st.query_params["session"] = _new_token_str
+                        _saved_token = _new_token_str
+                        _restored_user = {
+                            "id": _refresh_res.user.id,
+                            "email": _refresh_res.user.email,
+                            "type": "supabase",
+                            "access_token": _new_access_token,
+                            "refresh_token": _new_refresh_token
+                        }
+            except Exception:
+                pass
+        
+        # Fallback to local session token restore if not Supabase or Supabase check failed
+        if not _restored_user:
+            _restored_user = load_session_token(_saved_token)
+            
         if _restored_user:
             st.session_state["user"] = _restored_user
             st.session_state["_session_token"] = _saved_token
@@ -203,10 +243,17 @@ if "user" not in st.session_state:
                 try:
                     user = login_user(login_email, login_pass)
                     st.session_state["user"] = user
-                    # Save persistent session token (BUG 2 fix)
-                    _token = save_session_token(user)
-                    st.session_state["_session_token"] = _token
-                    st.query_params["session"] = _token
+                    
+                    if user.get("type") == "supabase" and user.get("access_token") and user.get("refresh_token"):
+                        _token = f"{user['access_token']}:::{user['refresh_token']}"
+                        st.session_state["_session_token"] = _token
+                        st.query_params["session"] = _token
+                    else:
+                        # Save persistent session token (BUG 2 fix)
+                        _token = save_session_token(user)
+                        st.session_state["_session_token"] = _token
+                        st.query_params["session"] = _token
+                        
                     st.success("🎉 Welcome back! Logging you in...")
                     time.sleep(1)
                     _login_ok = True
@@ -227,10 +274,17 @@ if "user" not in st.session_state:
                     try:
                         user = signup_user(signup_email, signup_pass)
                         st.session_state["user"] = user
-                        # Save persistent session token (BUG 2 fix)
-                        _token = save_session_token(user)
-                        st.session_state["_session_token"] = _token
-                        st.query_params["session"] = _token
+                        
+                        if user.get("type") == "supabase" and user.get("access_token") and user.get("refresh_token"):
+                            _token = f"{user['access_token']}:::{user['refresh_token']}"
+                            st.session_state["_session_token"] = _token
+                            st.query_params["session"] = _token
+                        else:
+                            # Save persistent session token (BUG 2 fix)
+                            _token = save_session_token(user)
+                            st.session_state["_session_token"] = _token
+                            st.query_params["session"] = _token
+                            
                         st.success("🎉 Account created successfully! Logging you in...")
                         time.sleep(1)
                         _signup_ok = True
@@ -263,7 +317,14 @@ with st.sidebar:
         # Revoke persistent session token (BUG 2 fix)
         _logout_token = st.session_state.get("_session_token", "") or st.query_params.get("session", "")
         if _logout_token:
-            delete_session_token(_logout_token)
+            _supabase_client = get_supabase_client()
+            if _supabase_client and ":::" in _logout_token:
+                try:
+                    _supabase_client.auth.sign_out()
+                except Exception:
+                    pass
+            else:
+                delete_session_token(_logout_token)
         if "session" in st.query_params:
             del st.query_params["session"]
         st.session_state.clear()

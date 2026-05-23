@@ -28,6 +28,8 @@ class LLMClient:
         self.api_key = LLM_API_KEY
         self.model = LLM_MODEL
         self.endpoint = LLM_ENDPOINT
+        if self.provider == "gemini" and self.endpoint == "https://api.openai.com/v1/chat/completions":
+            self.endpoint = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
 
     def generate_json(self, system_prompt: str, user_prompt: str) -> Optional[Dict[str, Any]]:
         """

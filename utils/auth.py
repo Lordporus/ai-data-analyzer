@@ -30,6 +30,10 @@ def _get_supabase_client() -> Optional[Client]:
             return None
     return None
 
+def get_supabase_client() -> Optional[Client]:
+    return _get_supabase_client()
+
+
 def _hash_password(password: str) -> str:
     return hashlib.sha256(password.encode()).hexdigest()
 
@@ -43,7 +47,13 @@ def signup_user(email: str, password: str) -> Dict:
         try:
             res = client.auth.sign_up({"email": email, "password": password})
             if res.user:
-                return {"id": res.user.id, "email": res.user.email, "type": "supabase"}
+                return {
+                    "id": res.user.id,
+                    "email": res.user.email,
+                    "type": "supabase",
+                    "access_token": res.session.access_token if res.session else None,
+                    "refresh_token": res.session.refresh_token if res.session else None
+                }
         except Exception as e:
             raise Exception(f"Supabase Signup Error: {str(e)}")
         raise Exception("Signup failed.")
@@ -76,13 +86,30 @@ def login_user(email: str, password: str) -> Dict:
     """
     client = _get_supabase_client()
     if client:
+        network_error = False
         try:
             res = client.auth.sign_in_with_password({"email": email, "password": password})
             if res.user:
-                return {"id": res.user.id, "email": res.user.email, "type": "supabase"}
+                return {
+                    "id": res.user.id,
+                    "email": res.user.email,
+                    "type": "supabase",
+                    "access_token": res.session.access_token if res.session else None,
+                    "refresh_token": res.session.refresh_token if res.session else None
+                }
+            raise Exception("Invalid email or password.")
         except Exception as e:
-            raise Exception(f"Supabase Login Error: {str(e)}")
-        raise Exception("Invalid email or password.")
+            err_msg = str(e).lower()
+            is_network_err = any(x in err_msg for x in ["getaddrinfo failed", "connectionerror", "connection refused", "timeout", "socket", "failed to establish a new connection"]) or "socket" in type(e).__name__.lower()
+            if is_network_err:
+                network_error = True
+            elif str(e) == "Invalid email or password.":
+                raise e
+            else:
+                raise Exception(f"Supabase Login Error: {str(e)}")
+        
+        if not network_error:
+            raise Exception("Invalid email or password.")
 
     if IS_PRODUCTION or not SUPABASE_URL and IS_PRODUCTION:
         raise Exception("Production auth requires Supabase credentials (SUPABASE_URL). Local JSON fallback is disabled in production.")

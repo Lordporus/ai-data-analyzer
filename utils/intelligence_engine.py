@@ -5,10 +5,49 @@ Implements an LLM-optional design with deterministic fallbacks.
 
 import logging
 import os
-from typing import Dict, Any, Optional
+import re
+from typing import Dict, Any, List, Optional
 from utils.llm import LLMClient
 
 logger = logging.getLogger(__name__)
+
+# ── Jargon control (mirrors agents/insight.py — kept in sync manually) ────────
+JARGON_REPLACEMENTS: List[tuple] = [
+    ("systemic volatility",          "sales variation"),
+    ("variance drivers",             "key factors"),
+    ("performance sensitivities",    "performance factors"),
+    ("strategic leverage",           "growth opportunity"),
+    ("operational throughput",       "business performance"),
+    ("unmodeled volatility",         "unexpected changes"),
+    ("downside exposure",            "risk"),
+    ("metric stabilization",         "improving consistency"),
+    ("risk vectors",                 "risk areas"),
+    ("modeled variances",            "key differences"),
+    ("structural drift",             "gradual decline"),
+    ("organizational throughput",    "business output"),
+    ("performance drift",            "performance change"),
+    ("directional persistency",      "consistent trend"),
+    ("lateral consistency",          "stable performance"),
+    ("operational variability risk", "operational risk"),
+    ("structural contraction",       "decline"),
+    ("progressive expansion",        "growth"),
+    # Generic placeholder terms
+    ('"index"',                      '"data"'),
+    ("'index'",                      "'data'"),
+    ("the index",                    "the data"),
+    ("Index is",                     "Data shows"),
+    ("Executive Context",            "Business Analytics"),
+]
+
+# ── Sector keyword map for auto-detection ─────────────────────────────────────
+_SECTOR_KEYWORDS: List[tuple] = [
+    # (keywords_list, sector_label)
+    (["complaint", "issue", "response", "grievance"], "Consumer Services"),
+    (["revenue", "sales", "amount", "price", "discount", "quantity"], "Retail & Commerce"),
+    (["patient", "diagnosis", "hospital", "treatment", "medication"], "Healthcare"),
+    (["transaction", "balance", "loan", "mortgage", "credit", "debit"], "Financial Services"),
+    (["product", "category", "channel", "order", "shipment"], "Retail & Commerce"),
+]
 
 class IntelligenceEngine:
     """
@@ -28,6 +67,36 @@ class IntelligenceEngine:
         else:
             self.mode = "llm"
             self.llm = self.llm_client
+            msg = f"IntelligenceEngine: Initialized LLM mode using provider '{self.provider}' and model '{self.llm_client.model}'"
+            logger.info(msg)
+            print(msg)
+
+    # ── Jargon Filtering ─────────────────────────────────────────────
+    def _remove_jargon(self, text: str) -> str:
+        """Scrubs all JARGON_REPLACEMENTS from a text field (case-insensitive)."""
+        if not text:
+            return text
+        for old, new in JARGON_REPLACEMENTS:
+            text = re.sub(re.escape(old), new, text, flags=re.IGNORECASE)
+        return text
+
+    # ── Sector Auto-Detection ────────────────────────────────────────
+    def _detect_sector(self, col_names: List[str]) -> str:
+        """
+        Infers the business sector from dataset column names.
+        Returns a human-readable sector label, falling back to the
+        first meaningful column name + 'Analytics'.
+        """
+        lowered = [c.lower().replace(" ", "_").replace("-", "_") for c in col_names]
+        for keywords, label in _SECTOR_KEYWORDS:
+            if any(kw in col for kw in keywords for col in lowered):
+                return label
+        # Default: first non-trivial column name
+        skip = {"index", "id", "unnamed", "row", "serial", "sr_no", "sl_no"}
+        for col in col_names:
+            if col.lower().replace(" ", "_") not in skip:
+                return col.replace("_", " ").title() + " Analytics"
+        return "Business Analytics"
 
     def generate_strategic_summary(self, context: dict) -> dict:
         """
@@ -197,9 +266,14 @@ class IntelligenceEngine:
         else:
             opp = "Focus on baseline stability and efficiency optimization across top-performing segments."
 
+        # ── Sector name via auto-detection (never hardcoded) ──────────
+        sector = self._detect_sector(col_names)
+
+        # ── Jargon filter on ALL text fields before returning ─────────
         return {
-            "executive_summary": exec_sum,
-            "primary_risk": risk,
-            "primary_opportunity": opp,
-            "confidence_comment": conf_comm
+            "executive_summary":   self._remove_jargon(exec_sum),
+            "primary_risk":        self._remove_jargon(risk),
+            "primary_opportunity": self._remove_jargon(opp),
+            "confidence_comment":  self._remove_jargon(conf_comm),
+            "sector_name":         self._remove_jargon(sector),
         }

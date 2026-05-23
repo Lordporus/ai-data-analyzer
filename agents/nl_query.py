@@ -55,7 +55,12 @@ class NLQueryAgent(BaseAgent):
             return NLQueryResult(error="Invalid input: Query or Data missing.")
 
         # ── LLM Mode ────────────────────────────────────────────────
-        if self.intelligence_engine.mode == "llm":
+        is_ai_enabled = self.intelligence_engine.mode == "llm" or (
+            self.intelligence_engine.api_key and self.intelligence_engine.provider != "none"
+        )
+        if is_ai_enabled:
+            if not self.intelligence_engine.llm:
+                self.intelligence_engine.llm = self.intelligence_engine.llm_client
             try:
                 schema_summary = self._get_schema_summary(df)
                 system_prompt = self._build_system_prompt()
