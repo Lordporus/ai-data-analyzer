@@ -18,13 +18,15 @@ Designed for business owners, consultants, and data analysts, the system handles
 
 - **Multi-Format Data Ingestion**: Upload CSV and Excel files, or connect directly to live databases (PostgreSQL, BigQuery, Snowflake).
 - **Automated Data Hygiene**: Smart handling of missing values, duplicates, mixed-type columns, and automatic schema inference.
-- **Business-Aware Insights**: Generates actionable, plain-English executive summaries. Automatically identifies key trends, anomalies, and non-obvious correlations—completely free of corporate jargon.
-- **Adaptive Forecasting**: Univariate and multivariate (VAR/ARIMAX) time-series forecasting. Automatically selects the best statistical model (Linear vs. Holt-Winters) based on data characteristics.
-- **Consulting-Grade PDF Reports**: Instantly generates branded PDF reports featuring custom logos, color schemes, and an executive summary.
+- **Business-Aware Insights**: Generates actionable, plain-English executive summaries. Automatically identifies key trends, anomalies, and non-obvious correlations—completely free of corporate jargon and markdown symbols (markdown-free recommendations).
+- **Auto Sector Detection**: Automatically detects business sector to frame insights.
+- **Adaptive Forecasting**: Univariate and multivariate (VAR/ARIMAX) time-series forecasting. Smart forecast filtering automatically excludes identifiers like ID, age, and postal columns. 
+- **Consulting-Grade PDF Reports**: Instantly generates branded PDF reports featuring custom logos, color schemes, and an executive summary (PDF report generation).
+- **LLM AI Mode**: Integrated with Gemini 2.5 Flash for advanced strategic narratives.
 - **Scheduled Deliveries**: Set up automated, recurring email reports using SendGrid.
-- **Interactive Dashboard**: Explore your data through a dynamic Streamlit interface with real-time filters, live progress tracking, and session history.
-- **Scalable Architecture**: Distributed task queue processing (Celery + Redis) for non-blocking concurrent user execution.
-- **Team Workspaces**: Persistent analysis history and team organization via Supabase Auth and Cloudflare R2 storage.
+- **Interactive Dashboard**: Explore your data through a dynamic Streamlit interface with real-time filters, live progress tracking, and session persistence.
+- **Scalable Architecture**: Redis/Celery background processing for non-blocking concurrent user execution.
+- **Team Workspaces**: Supabase auth with local fallback on network error, persistent analysis history, and team organization.
 
 ---
 
@@ -101,6 +103,7 @@ API_PORT=8000
 
 # LLM Configuration (Optional)
 LLM_PROVIDER=gemini
+LLM_MODEL=gemini-2.5-flash
 LLM_API_KEY=your-api-key
 
 # Database, Auth & Storage (Supabase & Cloudflare R2)
@@ -113,7 +116,8 @@ R2_BUCKET=your-bucket-name
 R2_PUBLIC_URL=your-r2-public-url
 
 # Task Queue
-REDIS_URL=redis://localhost:6379/0
+REDIS_URL=redis://localhost:6379/0?ssl_cert_reqs=CERT_NONE
+CELERY_BROKER_URL=redis://localhost:6379/0?ssl_cert_reqs=CERT_NONE
 
 # Scheduled Reports
 SENDGRID_API_KEY=your-sendgrid-api-key
@@ -143,9 +147,19 @@ The application is optimized for deployment on Render as a Dockerized Web Servic
    - `PORT` = `8501`
    - `SUPABASE_URL` = `<your-supabase-url>`
    - `SUPABASE_ANON_KEY` = `<your-supabase-key>`
-   - `REDIS_URL` = `<your-external-redis-url>`
+   - `REDIS_URL` = `<your-external-redis-url>?ssl_cert_reqs=CERT_NONE` *(Note: For Upstash Redis, append ?ssl_cert_reqs=CERT_NONE)*
+   - `CELERY_BROKER_URL` = `<your-external-redis-url>?ssl_cert_reqs=CERT_NONE`
    - `LLM_PROVIDER` = `gemini`
+   - `LLM_MODEL` = `gemini-2.5-flash`
    - `LLM_API_KEY` = `<your-gemini-key>`
+   - `SCHEDULER_ENABLED` = `true`
+   - `SENDGRID_API_KEY` = `<your-sendgrid-api-key>`
+
+---
+
+## Known Issues
+
+- **Supabase Organizations Table Missing**: The `public.organizations` table may be missing in some Supabase instances. This is a non-critical issue as the system has an active fallback mechanism.
 
 4. **Deploy**:
    - Click "Manual Deploy" -> "Deploy latest commit".

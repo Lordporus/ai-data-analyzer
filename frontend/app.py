@@ -715,7 +715,17 @@ with tab_upload:
                             st.session_state["ingestion_method"] = "db"
                             st.success(f"✅ Loaded {len(db_df)} rows successfully!")
                     except Exception as e:
-                        st.error(f"❌ PostgreSQL Connection Error: {str(e)}")
+                        _pg_err = str(e)
+                        if "no password" in _pg_err:
+                            st.error("Please enter your database password.")
+                        elif "Connection refused" in _pg_err:
+                            st.error("Could not reach the database server. Check the host and port.")
+                        elif "password authentication failed" in _pg_err:
+                            st.error("Wrong username or password. Please check your credentials.")
+                        elif "does not exist" in _pg_err:
+                            st.error("Database name not found. Check the database name field.")
+                        else:
+                            st.error("Connection failed. Please check all fields and try again.")
                         
         elif db_type == "Google BigQuery":
             bq_project = st.text_input("BigQuery Project ID", key="bq_proj")
@@ -1103,8 +1113,13 @@ with tab_compare:
 
     if compare_files and len(compare_files) >= 2:
         if st.button("🔄 Compare Files", type="primary", use_container_width=True):
+            # CHANGE 1 — Filter irrelevant columns before stats computation
+            _irrelevant_keywords = ("id", "unnamed", "postal", "code", "index", "zip", "age")
+
             comparison_data = []
             progress = st.progress(0, text="Analyzing files...")
+            _file_shapes = []  # store (filename, rows, cols) after filtering
+            _file_dfs = []    # store filtered dataframes for biggest-difference computation
 
             for idx, cfile in enumerate(compare_files):
                 ext = cfile.name.lower()
@@ -1112,6 +1127,17 @@ with tab_compare:
                     df = pd.read_excel(cfile, engine="openpyxl")
                 else:
                     df = pd.read_csv(cfile)
+
+                # Filter out irrelevant columns by name
+                filtered_cols = [
+                    c for c in df.columns
+                    if not any(kw in c.lower() for kw in _irrelevant_keywords)
+                ]
+                df = df[filtered_cols]
+
+                _file_shapes.append((cfile.name, len(df), len(df.columns)))
+                _file_dfs.append(df)
+
                 num_cols = df.select_dtypes(include="number").columns.tolist()
                 stats_row = {
                     "File": cfile.name,
@@ -1141,13 +1167,22 @@ with tab_compare:
                 if c not in ("File", "Rows", "Columns", "Missing Values", "Duplicates")
             ]
             if shared_metric_cols:
+                # CHANGE 2 — Exclude columns whose mean is >10x the median of all column means
+                import numpy as _np
+                _all_means = [comp_df[c].mean() for c in shared_metric_cols]
+                _median_of_means = _np.median(_all_means) if _all_means else 0
+                chart_metric_cols = [
+                    c for c, m in zip(shared_metric_cols, _all_means)
+                    if _median_of_means == 0 or abs(m) <= 10 * abs(_median_of_means)
+                ]
+
                 st.markdown("#### 📈 Metric Comparison")
                 fig = go.Figure()
                 for _, row in comp_df.iterrows():
                     fig.add_trace(go.Bar(
                         name=str(row["File"]),
-                        x=shared_metric_cols,
-                        y=[row[c] for c in shared_metric_cols],
+                        x=chart_metric_cols,
+                        y=[row[c] for c in chart_metric_cols],
                     ))
                 fig.update_layout(
                     barmode="group",
@@ -1156,126 +1191,171 @@ with tab_compare:
                 )
                 st.plotly_chart(fig, use_container_width=True)
 
+                # CHANGE 3 — Plain-English summary below chart
+                if len(_file_shapes) >= 2:
+                    _fn1, _r1, _c1 = _file_shapes[0]
+                    _fn2, _r2, _c2 = _file_shapes[1]
+                    st.write(f"File 1: {_fn1} — {_r1} rows, {_c1} columns")
+                    st.write(f"File 2: {_fn2} — {_r2} rows, {_c2} columns")
+
+                    try:
+                        _d1 = _file_dfs[0].select_dtypes(include="number")
+                        _d2 = _file_dfs[1].select_dtypes(include="number")
+                        _shared = [c for c in _d1.columns if c in _d2.columns]
+                        _best_col = None
+                        _best_pct = 0
+                        _best_dir = ""
+                        for _c in _shared:
+                            _m1 = _d1[_c].dropna().mean()
+                            _m2 = _d2[_c].dropna().mean()
+                            if _m1 is None or _m2 is None:
+                                continue
+                            import math
+                            if math.isnan(_m1) or math.isnan(_m2) or _m1 == 0:
+                                continue
+                            _pct = abs(_m1 - _m2) / abs(_m1) * 100
+                            if _pct > _best_pct:
+                                _best_pct = _pct
+                                _best_col = _c
+                                _best_dir = "higher" if _m2 > _m1 else "lower"
+                        if _best_col:
+                            st.write(f"Biggest difference: {_best_col} is {_best_pct:.1f}% {_best_dir} in File 2 vs File 1.")
+                        else:
+                            st.write("Biggest difference: no common numeric columns found between the two files.")
+                    except:
+                        pass
+
     elif compare_files and len(compare_files) < 2:
         st.info("Please upload at least 2 files for comparison.")
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# TAB 3 — Real-time Streaming Data Pipeline
+# TAB 3 — Live Google Sheets Analysis
 # ═══════════════════════════════════════════════════════════════════════
 with tab_stream:
-    st.markdown("### 📡 Real-time Streaming Data Pipeline")
-    st.markdown("Connect to a live streaming API endpoint to automatically poll, clean, and analyze data in real-time.")
+    st.markdown("### 📊 Live Google Sheets Analysis")
+    st.markdown("Paste a public Google Sheets link to analyze live data")
 
-    stream_url = st.text_input(
-        "Data Stream API Endpoint URL",
-        value="http://localhost:8000/api/mock-stream",
-        placeholder="https://api.yourcompany.com/realtime-sales",
-        key="stream_url_input"
+    sheet_url = st.text_input(
+        "Google Sheets URL",
+        placeholder="https://docs.google.com/spreadsheets/d/.../edit#gid=0",
+        key="gsheets_live_url_input",
     )
 
-    col_interval, col_toggle = st.columns([1, 1])
-    with col_interval:
-        poll_interval = st.slider("Polling Interval (seconds)", min_value=5, max_value=120, value=30, step=5)
-    with col_toggle:
-        auto_refresh = st.toggle("Enable Live Auto-Refresh", value=False, key="stream_auto_refresh")
+    poll_interval = st.selectbox(
+        "Auto-refresh interval",
+        ["Manual only", "Every 1 hour", "Every 6 hours", "Every 24 hours"],
+        key="gsheets_live_interval",
+    )
 
-    poll_now = st.button("🔄 Poll & Analyze Now", type="primary", use_container_width=True)
+    analyze_sheet_clicked = st.button(
+        "📥 Analyze Sheet Now",
+        type="primary",
+        use_container_width=True,
+        key="gsheets_live_analyze_btn",
+    )
 
-    if "stream_result" not in st.session_state:
-        st.session_state["stream_result"] = None
-    if "stream_last_polled" not in st.session_state:
-        st.session_state["stream_last_polled"] = 0.0
+    if "gsheets_live_result" not in st.session_state:
+        st.session_state["gsheets_live_result"] = None
 
-    current_time = time.time()
-    should_poll = poll_now
+    if analyze_sheet_clicked and sheet_url.strip():
+        # Transform the share URL into a CSV export URL
+        sheet_url_clean = sheet_url.strip()
+        if "spreadsheets/d/" in sheet_url_clean:
+            import re
+            match = re.search(r'/spreadsheets/d/([a-zA-Z0-9-_]+)', sheet_url_clean)
+            gid_match = re.search(r'gid=(\d+)', sheet_url_clean)
+            if match:
+                sheet_id = match.group(1)
+                gid = gid_match.group(1) if gid_match else "0"
+                transformed_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv&gid={gid}"
+            else:
+                transformed_url = sheet_url_clean
+        else:
+            transformed_url = sheet_url_clean
 
-    if auto_refresh:
-        time_elapsed = current_time - st.session_state["stream_last_polled"]
-        if time_elapsed >= poll_interval:
-            should_poll = True
-
-    if should_poll:
-        with st.spinner("Fetching data from stream..."):
+        with st.spinner("Fetching data from Google Sheets..."):
             try:
-                from utils.stream_connector import poll_once
-                df = poll_once(stream_url)
-                if df.empty:
-                    st.error("❌ Data stream returned an empty response.")
-                else:
-                    st.success(f"✅ Polled successfully! Fetched {len(df)} rows.")
-                    st.session_state["stream_last_polled"] = current_time
-                    
-                    temp_stream_path = temp_dir / "live_stream_data.csv"
-                    df.to_csv(temp_stream_path, index=False)
-                    
-                    with st.spinner("Running streaming analytics pipeline..."):
-                        orchestrator = MasterOrchestrator()
-                        
-                        logo_path = None
-                        if logo_file is not None:
-                            import uuid
-                            logo_suffix = Path(logo_file.name).suffix
-                            temp_logo_path = UPLOAD_DIR / f"logo_{uuid.uuid4().hex[:8]}{logo_suffix}"
-                            temp_logo_path.write_bytes(logo_file.getvalue())
-                            logo_path = str(temp_logo_path)
-                            
-                        branding_config = {
-                            "company_name": company_name,
-                            "primary_color": brand_color,
-                            "logo_path": logo_path,
-                            "footer_text": f"Confidential — Generated by {company_name}",
-                            "analyst_name": analyst_name
-                        }
-                        
-                        result = orchestrator.run(
-                            file_path=str(temp_stream_path),
-                            output_dir=str(OUTPUT_DIR / "live_stream_output"),
-                            branding=branding_config
-                        )
-                        st.session_state["stream_result"] = result
-                        
-                        # Save streaming run results to pickle & persist in workspace
-                        import uuid
-                        import pickle
+                from utils.gsheets import load_google_sheet
+                _sheet_df = load_google_sheet(transformed_url)
+            except Exception:
+                st.error(
+                    "Could not connect to this Google Sheet. "
+                    "Make sure sharing is set to 'Anyone with the link can view'."
+                )
+                _sheet_df = None
+
+        if _sheet_df is not None and not _sheet_df.empty:
+            st.success(f"✅ Loaded {len(_sheet_df)} rows from Google Sheets.")
+
+            import uuid as _uuid_gs
+            import pickle as _pickle_gs
+
+            _gs_temp_path = OUTPUT_DIR / "_temp" / f"gsheet_{_uuid_gs.uuid4().hex[:8]}.csv"
+            _gs_temp_path.parent.mkdir(parents=True, exist_ok=True)
+            _sheet_df.to_csv(_gs_temp_path, index=False)
+
+            _gs_output_dir = OUTPUT_DIR / "gsheet_live_output"
+            _gs_output_dir.mkdir(parents=True, exist_ok=True)
+
+            logo_path = None
+            if logo_file is not None:
+                _logo_suffix = Path(logo_file.name).suffix
+                _temp_logo = UPLOAD_DIR / f"logo_{_uuid_gs.uuid4().hex[:8]}{_logo_suffix}"
+                _temp_logo.write_bytes(logo_file.getvalue())
+                logo_path = str(_temp_logo)
+
+            _gs_branding = {
+                "company_name": company_name,
+                "primary_color": brand_color,
+                "logo_path": logo_path,
+                "footer_text": f"Confidential — Generated by {company_name}",
+                "analyst_name": analyst_name,
+            }
+
+            with st.spinner("Running AI analysis pipeline..."):
+                try:
+                    _gs_orchestrator = MasterOrchestrator()
+                    _gs_result = _gs_orchestrator.run(
+                        csv_path=str(_gs_temp_path),
+                        output_dir=str(_gs_output_dir),
+                        branding=_gs_branding,
+                    )
+                    st.session_state["gsheets_live_result"] = _gs_result
+
+                    # Persist run in workspace
+                    _gs_job_id = _gs_result.job_id or f"gsheet_{int(time.time())}"
+                    _gs_pickle_path = _gs_output_dir / f"{_gs_job_id}_pipeline_result.pkl"
+                    with open(_gs_pickle_path, "wb") as _f:
+                        _pickle_gs.dump(_gs_result, _f)
+                    try:
                         from utils.storage import upload_to_r2
                         from utils.workspace import add_analysis_run
-                        
-                        stream_job_id = result.job_id or f"stream_{int(time.time())}"
-                        stream_output_dir = OUTPUT_DIR / "live_stream_output"
-                        stream_output_dir.mkdir(parents=True, exist_ok=True)
-                        stream_pickle_path = stream_output_dir / f"{stream_job_id}_pipeline_result.pkl"
-                        with open(stream_pickle_path, "wb") as f:
-                            pickle.dump(result, f)
-                            
-                        storage_key = f"{stream_job_id}_pipeline_result.pkl"
-                        try:
-                            public_url = upload_to_r2(str(stream_pickle_path), storage_key)
-                            active_org = st.session_state.get("active_org", {"id": "default"})
-                            user_info = st.session_state.get("user", {"id": "anonymous"})
-                            
-                            add_analysis_run(
-                                org_id=active_org["id"],
-                                user_id=user_info["id"],
-                                dataset_name="live_stream_data.csv",
-                                status="completed",
-                                output_path=public_url
-                            )
-                        except Exception as persist_err:
-                            print(f"Streaming persist error: {persist_err}")
-            except Exception as e:
-                st.error(f"❌ Error polling stream: {str(e)}")
+                        _gs_public_url = upload_to_r2(str(_gs_pickle_path), f"{_gs_job_id}_pipeline_result.pkl")
+                        _gs_active_org = st.session_state.get("active_org", {"id": "default"})
+                        _gs_user_info = st.session_state.get("user", {"id": "anonymous"})
+                        add_analysis_run(
+                            org_id=_gs_active_org["id"],
+                            user_id=_gs_user_info["id"],
+                            dataset_name="google_sheet_live.csv",
+                            status="completed",
+                            output_path=_gs_public_url,
+                        )
+                    except Exception as _gs_persist_err:
+                        print(f"GSheet live persist error: {_gs_persist_err}")
+                except Exception as _gs_run_err:
+                    st.error(f"❌ Analysis pipeline failed: {_gs_run_err}")
+        elif _sheet_df is not None and _sheet_df.empty:
+            st.warning("⚠️ The Google Sheet appears to be empty.")
 
-    if st.session_state.get("stream_result") is not None:
-        stream_res = st.session_state["stream_result"]
-        if stream_res.status == "completed":
-            st.info(f"Last Polled: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(st.session_state['stream_last_polled']))}")
+    elif analyze_sheet_clicked and not sheet_url.strip():
+        st.warning("Please enter a Google Sheets URL first.")
+
+    if st.session_state.get("gsheets_live_result") is not None:
+        _gs_res = st.session_state["gsheets_live_result"]
+        if _gs_res.status == "completed":
             from frontend.dashboard_ui import render_interactive_dashboard
-            render_interactive_dashboard(stream_res)
+            render_interactive_dashboard(_gs_res)
         else:
-            st.error(f"❌ Pipeline failed: {', '.join(stream_res.errors)}")
-
-    if auto_refresh:
-        time.sleep(1)
-        st.rerun()
+            st.error(f"❌ Pipeline failed: {', '.join(_gs_res.errors)}")
 
