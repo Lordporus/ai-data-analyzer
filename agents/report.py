@@ -278,6 +278,12 @@ class ReportAgent(BaseAgent):
         except Exception as e:
             logger.error(f"Report Engine Failure: {e}", exc_info=True)
             raise e
+
+    def _clean_markdown(self, text: str) -> str:
+        if not text:
+            return text
+        text = text.replace('■', '').replace('**', '').replace('##', '').replace('#', '').replace('__', '').replace('*', '')
+        return text.strip()
     
     def _remove_jargon(self, text: str) -> str:
         """
@@ -288,6 +294,10 @@ class ReportAgent(BaseAgent):
             return text
         import re
         replacements = [
+            ("minimize structural performance drift", "improve consistency"),
+            ("preserves organizational throughput", "keeps operations running smoothly"),
+            ("predictive alignment",         "better forecasting"),
+            ("structural linkage",           "strong connection"),
             ("systemic volatility",          "sales variation"),
             ("variance drivers",             "key factors"),
             ("operational throughput",       "business performance"),
@@ -297,7 +307,7 @@ class ReportAgent(BaseAgent):
             ("performance sensitivities",    "performance factors"),
             ("strategic leverage",           "growth opportunity"),
             ("risk vectors",                 "risk areas"),
-            ("modeled variances",            "key differences"),
+            ("modeled variances",            "data patterns"),
             ("structural drift",             "gradual decline"),
             ("organizational throughput",    "business output"),
             ("performance drift",            "performance change"),
@@ -450,9 +460,14 @@ class ReportAgent(BaseAgent):
         canvas.setFillColor(HexColor("#1a1a2e"))
         canvas.setFont("Helvetica-Bold", 11)
         canvas.drawString(55, doc.height - 295, "EXECUTIVE SUMMARY")
-        canvas.setFont("Helvetica", 10)
+        canvas.setFont("Helvetica", 9)
         # First insight as exec summary
-        canvas.drawString(55, doc.height - 315, self.exec_summary[:120] + "...")
+        from reportlab.lib.utils import simpleSplit
+        lines = simpleSplit(self.exec_summary, "Helvetica", 9, doc.width - 110)
+        y = doc.height - 315
+        for line in lines[:5]:
+            canvas.drawString(55, y, line)
+            y -= 12
         
         # Footer — show "Confidential" only once (on later pages via branding.footer_text)
         canvas.setFillColor(HexColor("#666666"))
@@ -571,18 +586,25 @@ class ReportAgent(BaseAgent):
         ]))
         story.append(t2)
         
-        story.append(PageBreak())
+        story.append(Spacer(1, 20))
 
     def _build_kpis(self, story, insight):
         story.append(Paragraph("Core Business Metrics", self.sty.title))
         story.append(Spacer(1, 12))
         
-        kpis = [k for k in insight.kpi_list if self._is_business_column(k.name)]
+        kpis = []
+        for k in insight.kpi_list:
+            if not self._is_business_column(k.name):
+                continue
+            if any(w in k.name.lower() for w in ['age', 'id', 'index', 'row', 'serial', 'unnamed']):
+                continue
+            kpis.append(k)
+            
         kpis.sort(key=lambda x: 0 if any(s in x.name.lower() for s in ["rev", "sales", "profit"]) else 1)
         
         if not kpis:
             story.append(Paragraph("No tracked business KPIs identified.", self.sty.body))
-            story.append(PageBreak())
+            story.append(Spacer(1, 20))
             return
 
         # 2x3 Grid Layout
@@ -592,50 +614,12 @@ class ReportAgent(BaseAgent):
             val_str = f"{float(k.value):,.2f}" if isinstance(k.value, (int, float)) else str(k.value)
             display_name = self._format_metric_name(k.name)
             
-            # --- Business Interpretation Layer ---
-            metric_type = self._classify_metric_type(k.name, k.value)
-            interpretation = ""
-            
-            # Find matching trend for context
-            matching_trend = next((t for t in insight.trend_summary if t.column in k.name), None)
-            cv = 0.0 # Coefficient of Variation proxy
-            if matching_trend:
-                # Calculate volatility classification
-                # improving this via trend R2 (inverse proxy for volatility/noise)
-                volatility_level = "High" if matching_trend.r_squared < 0.3 else ("Moderate" if matching_trend.r_squared < 0.7 else "Low")
-                
-                direction_map = {
-                    "increasing": "expansion",
-                    "decreasing": "contraction",
-                    "stable": "consistency"
-                }
-                movement = direction_map.get(matching_trend.direction, "movement")
-                
-                # Differentiated Logic based on Metric Type
-                if metric_type == "Volume":
-                    interpretation = f"Volume levels indicate {volatility_level.lower()} volatility in throughput. Current {movement} suggests changing scale requirements."
-                elif metric_type == "Central Tendency":
-                    interpretation = f"Average performance shows {movement}, stabilizing around current benchmarks with {volatility_level.lower()} variance."
-                elif metric_type == "Dispersion":
-                    interpretation = f"Observed variability reflects {volatility_level.lower()} dispersion magnitude, signaling {'potential instability' if volatility_level == 'High' else 'controlled process conditions'}."
-                elif metric_type == "Range":
-                    interpretation = f"Span indicates performance bandwidth. {volatility_level} fluctuation observed between extremes."
-                elif metric_type == "Ratio":
-                    interpretation = f"Efficiency rate exhibits {movement}. {volatility_level} stability suggests {'structural shifts' if volatility_level == 'High' else 'predictable outcomes'}."
-                else:
-                    interpretation = f"Metric performance displays {movement} with {volatility_level.lower()} reliability."
-            else:
-                 interpretation = "Baseline metric stability observed across current reporting period."
-
             # Content Cell (Vertical Stack)
             cell_content = [
                 Paragraph(f"<b>{display_name}</b>", self.sty.kpi_label),
                 Spacer(1, 4),
                 Paragraph(val_str, self.sty.kpi_value),
                 Spacer(1, 6),
-                Paragraph(interpretation, self.sty.caption),
-                Spacer(1, 4),
-                # Clean up description if it exists
                 Paragraph(k.description[:80] + "..." if len(k.description) > 80 else k.description, self.sty.caption)
             ]
             row.append(cell_content)
@@ -668,7 +652,7 @@ class ReportAgent(BaseAgent):
         story.append(Spacer(1, 24))
         self._build_bar_chart(story, insight)
 
-        story.append(PageBreak())
+        story.append(Spacer(1, 20))
 
     def _build_trends(self, story, insight):
         story.append(Paragraph("Operational Trajectory", self.sty.title))
@@ -689,7 +673,7 @@ class ReportAgent(BaseAgent):
         trends = [t for t in insight.trend_summary if t.direction != "stable" and self._is_business_column(t.column)]
         
         if not trends:
-            story.append(Paragraph("Baseline consistency detected across all primary operational channels. Volatility remains within standard deviations, indicating a stabilized performance environment.", self.sty.body))
+            story.append(Paragraph("Performance is stable across the dataset with no major fluctuations detected.", self.sty.body))
         else:
             for t in trends[:4]:
                 clean_name = self._format_metric_name(t.column)
@@ -722,7 +706,7 @@ class ReportAgent(BaseAgent):
             imp = f"The observed trajectory in {c_name} indicates a direct impact on future throughput capacity. Strategic resource reallocation is advised."
             story.append(self._build_callout_box("Business Implication", imp))
 
-        story.append(PageBreak())
+        story.append(Spacer(1, 20))
 
     def _build_correlations(self, story, insight):
         story.append(Paragraph("Relationship Matrix", self.sty.title))
@@ -741,10 +725,7 @@ class ReportAgent(BaseAgent):
         
         pairs = self._get_correlation_pairs(insight.correlation_matrix)
         if not pairs:
-             story.append(Paragraph(
-                 "Metric independence suggests decentralized performance drivers. This reduces systemic concentration risk "
-                 "but may limit strategic leverage opportunities across high-impact functions.", self.sty.body
-             ))
+             story.append(Paragraph("Most columns are independent of each other, meaning each metric performs on its own without strong dependencies.", self.sty.body))
         else:
              for p in pairs[:5]:
                  n1 = self._format_metric_name(p[0])
@@ -760,7 +741,7 @@ class ReportAgent(BaseAgent):
                  story.append(Paragraph(msg, self.sty.body))
                  story.append(Spacer(1, 12))
 
-        story.append(PageBreak())
+        story.append(Spacer(1, 20))
 
     def _build_forecast(self, story, forecast):
         """Strategic Projection Section with stability fallback."""
@@ -769,7 +750,7 @@ class ReportAgent(BaseAgent):
 
         if not forecast or not forecast.forecasts:
             story.append(Paragraph("Dataset density insufficient for reliable strategic projection. Volatility thresholds or confidence intervals currently exceed acceptable predictive corridors.", self.sty.body))
-            story.append(PageBreak())
+            story.append(Spacer(1, 20))
             return
             
 
@@ -790,20 +771,25 @@ class ReportAgent(BaseAgent):
             if not hist or not pred: continue
             
             delta = ((pred[-1] - hist[-1]) / hist[-1]) * 100 if hist[-1] != 0 else 0
-            direction = "positive" if delta > 0 else "negative"
             
             clean_name = self._format_metric_name(metric)
             story.append(Paragraph(f"{clean_name} Outlook:", self.sty.h2))
             story.append(Spacer(1, 12))
-            msg = (
-                f"Projected performance exhibits a {direction} variance of {abs(delta):.1f}%, transitioning from a baseline of {hist[-1]:,.2f} "
-                f"to a future-state estimate of {pred[-1]:,.2f}. Operational readiness and resource allocation models should align with this forecasted trajectory "
-                "to capitalize on momentum or mitigate prospective downsides."
-            )
+            
+            if delta > 0:
+                msg = (
+                    f"Projected performance exhibits an expected growth of {abs(delta):.1f}%, up from {hist[-1]:,.2f} "
+                    f"to a projected value of {pred[-1]:,.2f}. Plan inventory and resources based on this projected trend."
+                )
+            else:
+                msg = (
+                    f"Projected performance exhibits an expected decline of {abs(delta):.1f}%, down from {hist[-1]:,.2f} "
+                    f"to a projected value of {pred[-1]:,.2f}. Plan inventory and resources based on this projected trend."
+                )
             story.append(Paragraph(msg, self.sty.body))
             story.append(Spacer(1, 12))
             
-        story.append(PageBreak())
+        story.append(Spacer(1, 20))
 
     def _build_strategy(self, story, insight):
         story.append(Paragraph("Strategic Recommendations", self.sty.title))
@@ -811,11 +797,18 @@ class ReportAgent(BaseAgent):
         
         if not insight.business_recommendations:
              story.append(Paragraph("No structural recommendations triggered by current data state. Operational consistency remains within baseline expectations.", self.sty.body))
-             story.append(PageBreak())
+             story.append(Spacer(1, 20))
              return
              
         table_data = []
-        for rec in insight.business_recommendations[:6]:
+        valid_recs = []
+        for rec in insight.business_recommendations:
+            rec_lower = rec.lower()
+            if any(w in rec_lower for w in ['age', 'id', 'index', 'row', 'serial', 'rank', 'year']):
+                continue
+            valid_recs.append(rec)
+
+        for rec in valid_recs[:6]:
             risk_level = "Medium"
             impact = 7.0
             horizon = "Short-to-medium term (1–2 quarters)"
@@ -832,21 +825,17 @@ class ReportAgent(BaseAgent):
             # --- Business Sanitization ---
             # Remove technical artifacts like (Slope: 0.23...) or (R2: 0.55...)
             clean_rec = rec.replace("Recommendation:", "").split(" (Slope")[0].split(" (R2")[0].strip()
+            clean_rec = self._clean_markdown(clean_rec)
+            clean_rec = self._remove_jargon(clean_rec)
             # Capitalize first letter
             clean_rec = clean_rec[0].upper() + clean_rec[1:] if clean_rec else "Optimize primary performance driver."
             
             c_header = Paragraph(f"Strategic Objective: {clean_rec}", self.sty.h2)
             c_meta = Paragraph(f"<font color={color}>Risk: {risk_level}</font> | Expected Impact: {impact}/10 | Horizon: {horizon}", self.sty.caption)
-            c_desc = Paragraph(
-                "<b>Rationale:</b> Priority implementation suggested based on modeled variances and significance levels. "
-                "Addressing this objective minimizes structural performance drift and preserves organizational throughput.", 
-                self.sty.body
-            )
             c_conf = Paragraph(f"<b>Confidence:</b> {confidence}", self.sty.caption)
             
             table_data.append([c_header])
             table_data.append([c_meta])
-            table_data.append([c_desc])
             table_data.append([c_conf])
             table_data.append([Spacer(1, 16)])
             
@@ -857,105 +846,11 @@ class ReportAgent(BaseAgent):
             ('BOTTOMPADDING', (0,0), (-1,-1), 2),
         ]))
         story.append(t)
-        
-        # Business Implication Callout
-        if insight.business_recommendations:
-            rec = insight.business_recommendations[0]
-            clean_rec = rec.replace("Recommendation:", "").split(" (Slope")[0].split(" (R2")[0].strip()
-            story.append(Spacer(1, 12))
-            story.append(self._build_callout_box("Strategic Focus", f"The objective to '{clean_rec}' is the primary lever for operational performance. Addressing this immediately minimizes structural drift and ensures predictive alignment."))
 
-        story.append(PageBreak())
+        story.append(Spacer(1, 20))
 
     def _build_appendix(self, story, insight, forecast=None):
-        story.append(Paragraph("Technical Metadata", self.sty.title))
-        story.append(Spacer(1, 12))
-        
-        story.append(Paragraph(f"<b>Processing Scope:</b> {self.ingestion.row_count} records across {self.ingestion.col_count} dimensions.", self.sty.body))
-        story.append(Spacer(1, 12))
-        story.append(Paragraph("Cleaning Protocol:", self.sty.h2))
-        story.append(Spacer(1, 12))
-        
-        if self.cleaning.cleaning_log and self.cleaning.cleaning_log.steps:
-            for s in self.cleaning.cleaning_log.steps:
-                story.append(Paragraph(f"• {s['action']} executed on {s['rows_affected']} records.", self.sty.body))
-                story.append(Spacer(1, 12))
-        else:
-             story.append(Paragraph("No corrective cleaning maneuvers required.", self.sty.body))
-
-        # Add Calculation Methodology page
-        story.append(PageBreak())
-        story.append(Paragraph("Calculation Methodology", self.sty.title))
-        story.append(Spacer(1, 12))
-        story.append(Paragraph(
-            "This appendix details the mathematical formulas, threshold controls, and statistical lineage for "
-            "every KPI, trend, relationship, anomaly, and forecast in this report.",
-            self.sty.body
-        ))
-        story.append(Spacer(1, 12))
-        
-        style_header = ParagraphStyle(
-            "AppendixTableHeader",
-            parent=self.sty.body,
-            fontName=FONT_HEAD,
-            fontSize=9,
-            leading=11,
-            textColor=colors.white,
-            alignment=TA_LEFT
-        )
-        style_cell = ParagraphStyle(
-            "AppendixTableCell",
-            parent=self.sty.body,
-            fontName=FONT_BODY,
-            fontSize=8,
-            leading=10,
-            textColor=SECONDARY_TEXT,
-            alignment=TA_LEFT
-        )
-        
-        table_rows = [
-            [
-                Paragraph("<b>Category / Metric</b>", style_header),
-                Paragraph("<b>Formula / Methodology</b>", style_header),
-                Paragraph("<b>Threshold / Controls</b>", style_header),
-                Paragraph("<b>Result / Lineage</b>", style_header)
-            ]
-        ]
-        
-        has_audit_logs = False
-        
-        if getattr(insight, "audit_log", None):
-            for category, log in insight.audit_log.items():
-                has_audit_logs = True
-                table_rows.append([
-                    Paragraph(f"<b>{category}</b>", style_cell),
-                    Paragraph(str(log.get("formula", "N/A")), style_cell),
-                    Paragraph(str(log.get("threshold", "N/A")), style_cell),
-                    Paragraph(str(log.get("result", "N/A")), style_cell)
-                ])
-                
-        if forecast and getattr(forecast, "audit_log", None):
-            for metric, log in forecast.audit_log.items():
-                has_audit_logs = True
-                table_rows.append([
-                    Paragraph(f"<b>Forecast: {metric}</b>", style_cell),
-                    Paragraph(str(log.get("formula", "N/A")), style_cell),
-                    Paragraph(str(log.get("threshold", "N/A")), style_cell),
-                    Paragraph(str(log.get("result", "N/A")), style_cell)
-                ])
-                
-        if has_audit_logs:
-            t = Table(table_rows, colWidths=[100, 125, 125, 125])
-            t.setStyle(TableStyle([
-                ('BACKGROUND', (0, 0), (-1, 0), BRAND_RGB),
-                ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-                ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-                ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor("#E5E7EB")),
-                ('PADDING', (0, 0), (-1, -1), 6),
-            ]))
-            story.append(t)
-        else:
-            story.append(Paragraph("No audit lineage logs available for this analysis.", self.sty.body))
+        story.append(Paragraph("Analysis powered by AI Data Analyzer Intelligence Engine.", self.sty.body))
 
     # ── Charting & Helpers ──────────────────────────────────────────
 
@@ -1044,8 +939,8 @@ class ReportAgent(BaseAgent):
         
         # P3: Strategic Focus
         p3 = (
-            "Strategic focus for the upcoming period should prioritize metric stabilization and the neutralization "
-            "of identified risk vectors. Immediate tactical reallocation of resources toward high-impact "
+            "Focus this week on top performing segments to maintain growth. "
+            "Immediate tactical reallocation of resources toward high-impact "
             "variance drivers is advised. By aligning operational capacity with historical performance "
             "intensities, the organization can capitalize on emerging momentum while maintaining a "
             "defensive posture against unmodeled volatility."
