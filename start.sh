@@ -11,7 +11,7 @@ uvicorn api.main:app --host 0.0.0.0 --port 8000 &
 
 # Start Celery worker in the background
 echo "Starting Celery Worker..."
-celery -A utils.task_queue.celery_app worker --loglevel=info &
+celery -A utils.task_queue.celery_app worker --loglevel=info --concurrency=2 &
 
 # Start Streamlit on the port provided by the environment (default 8501)
 echo "Starting Streamlit..."
