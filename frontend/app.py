@@ -296,7 +296,9 @@ if "user" not in st.session_state:
 
 # Ensure an active organization is loaded in session state
 if "active_org" not in st.session_state:
-    orgs = get_organizations()
+    if "orgs" not in st.session_state:
+        st.session_state["orgs"] = get_organizations()
+    orgs = st.session_state["orgs"]
     if orgs:
         st.session_state["active_org"] = orgs[0]
 
@@ -337,7 +339,9 @@ with st.sidebar:
     # Collapsible groups for Sidebar settings
     with st.expander("🏢 Team Workspace", expanded=False):
         # ── Workspace Switcher & Creator ─────────────────────────────────
-        orgs = get_organizations()
+        if "orgs" not in st.session_state:
+            st.session_state["orgs"] = get_organizations()
+        orgs = st.session_state["orgs"]
         org_names = [org["name"] for org in orgs]
         current_idx = 0
         if "active_org" in st.session_state:
@@ -357,6 +361,8 @@ with st.sidebar:
             if org["name"] == selected_org_name:
                 if "active_org" not in st.session_state or st.session_state["active_org"]["id"] != org["id"]:
                     st.session_state["active_org"] = org
+                    if "org_history" in st.session_state:
+                        del st.session_state["org_history"]
                     st.rerun()
                     
         st.markdown("**Create Workspace**")
@@ -365,6 +371,8 @@ with st.sidebar:
             if new_org_name.strip():
                 new_org = create_organization(new_org_name.strip())
                 st.session_state["active_org"] = new_org
+                if "orgs" in st.session_state:
+                    del st.session_state["orgs"]
                 st.success(f"Workspace '{new_org_name}' created!")
                 time.sleep(0.5)
                 st.rerun()
@@ -405,7 +413,9 @@ with st.sidebar:
     with st.expander("📜 Shared History", expanded=False):
         if "active_org" in st.session_state:
             active_org = st.session_state["active_org"]
-            history = get_org_analysis_history(active_org["id"])
+            if "org_history" not in st.session_state:
+                st.session_state["org_history"] = get_org_analysis_history(active_org["id"])
+            history = st.session_state["org_history"]
             if not history:
                 st.info("No shared analysis runs in this workspace yet.")
             else:
@@ -804,10 +814,11 @@ with tab_upload:
         st.caption("⏱️ Estimated time: 10-15 seconds for datasets under 10MB")
         run_clicked = st.button("🚀 Run Full Analysis", type="primary", use_container_width=True)
         
-        if run_clicked:
+        if run_clicked or "celery_task_id" in st.session_state:
             # Clear previous state
-            st.session_state["analysis_result"] = None
-            st.session_state["analysis_complete"] = False
+            if run_clicked:
+                st.session_state["analysis_result"] = None
+                st.session_state["analysis_complete"] = False
             
             job_output = OUTPUT_DIR / f"streamlit_{int(time.time())}"
 
@@ -866,18 +877,22 @@ with tab_upload:
                 try:
                     if _use_celery:
                         # ── Celery path (Redis is running) ────────────────────────
-                        task = run_analysis_task.delay(
-                            str(temp_path),
-                            str(job_output),
-                            branding=branding_config,
-                            dataset_name=uploaded_file.name if uploaded_file else temp_path.name,
-                        )
+                        if "celery_task_id" not in st.session_state:
+                            task = run_analysis_task.delay(
+                                str(temp_path),
+                                str(job_output),
+                                branding=branding_config,
+                                dataset_name=uploaded_file.name if uploaded_file else temp_path.name,
+                            )
+                            st.session_state["celery_task_id"] = task.id
+                        else:
+                            task = run_analysis_task.AsyncResult(st.session_state["celery_task_id"])
 
                         # Poll task progress and update st.status live
-                        while True:
-                            task_state = task.state
-                            if task_state == "PROGRESS":
-                                meta = task.info or {}
+                        task_state = task.state
+                        if task_state == "PROGRESS" or task_state == "PENDING":
+                            meta = task.info or {}
+                            if isinstance(meta, dict):
                                 pct = meta.get("pct", 0.05)
                                 stage_key = meta.get("stage", "").lower()
                                 if stage_key != _last_stage[0]:
@@ -885,23 +900,26 @@ with tab_upload:
                                     label, _ = _stage_map.get(stage_key, (f"⏳ {meta.get('stage', 'Processing...')}", pct))
                                     st.write(label)
                                 progress_bar.progress(pct, text=f"⏳ {meta.get('stage', 'Processing...')}")
-                            elif task_state == "SUCCESS":
-                                result_dict = task.result or {}
-                                if result_dict.get("status") == "failed":
-                                    errors = result_dict.get("errors", ["Pipeline failed."])
-                                    raise Exception(" | ".join(errors))
-
-                                pickle_path = result_dict.get("pickle_path")
-                                if pickle_path and Path(pickle_path).exists():
-                                    with open(pickle_path, "rb") as f:
-                                        result = pickle.load(f)
-                                else:
-                                    raise Exception("Pipeline completed but results are missing from disk.")
-                                break
-                            elif task_state == "FAILURE":
-                                raise Exception(str(task.result) if task.result else "Celery execution failed.")
-
                             time.sleep(0.3)
+                            st.rerun()
+                        elif task_state == "SUCCESS":
+                            result_dict = task.result or {}
+                            if result_dict.get("status") == "failed":
+                                del st.session_state["celery_task_id"]
+                                errors = result_dict.get("errors", ["Pipeline failed."])
+                                raise Exception(" | ".join(errors))
+
+                            pickle_path = result_dict.get("pickle_path")
+                            if pickle_path and Path(pickle_path).exists():
+                                with open(pickle_path, "rb") as f:
+                                    result = pickle.load(f)
+                            else:
+                                del st.session_state["celery_task_id"]
+                                raise Exception("Pipeline completed but results are missing from disk.")
+                            del st.session_state["celery_task_id"]
+                        elif task_state == "FAILURE":
+                            del st.session_state["celery_task_id"]
+                            raise Exception(str(task.result) if task.result else "Celery execution failed.")
 
                     else:
                         # ── Synchronous fallback (no Redis / no Celery worker) ────
@@ -961,6 +979,9 @@ with tab_upload:
                         )
                     except Exception as persist_err:
                         print(f"Workspace persist error (non-fatal): {persist_err}")
+                        
+                    if "org_history" in st.session_state:
+                        del st.session_state["org_history"]
 
                     # STORE RESULT IN SESSION STATE
                     st.session_state["analysis_result"] = result
@@ -969,6 +990,8 @@ with tab_upload:
                     status.update(label="✅ Analysis Complete!", state="complete")
 
                 except Exception as exc:
+                    if "celery_task_id" in st.session_state:
+                        del st.session_state["celery_task_id"]
                     st.error(f"❌ Analysis Failed: {exc}")
                     st.session_state["analysis_complete"] = False
                     status.update(label="❌ Analysis Failed", state="error")
