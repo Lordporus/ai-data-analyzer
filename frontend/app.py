@@ -363,7 +363,10 @@ with st.sidebar:
                     st.session_state["active_org"] = org
                     if "org_history" in st.session_state:
                         del st.session_state["org_history"]
-                    st.rerun()
+                    # NOTE: No st.rerun() here — calling rerun inside a selectbox
+                    # render loop (not a button handler) causes an infinite rerun
+                    # cycle. Session state update alone is sufficient; Streamlit
+                    # will re-render affected widgets on the next natural cycle.
                     
         st.markdown("**Create Workspace**")
         new_org_name = st.text_input("Workspace Name", key="new_org_name_input", placeholder="New team name...")
