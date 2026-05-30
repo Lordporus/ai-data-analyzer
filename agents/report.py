@@ -55,6 +55,13 @@ from agents.ingestion import IngestionResult
 from agents.insight import InsightResult, KPI
 from agents.repair import RepairResult
 from agents.forecast import ForecastResult
+
+# Ensure project root is on sys.path regardless of import order
+import sys
+_PROJECT_ROOT = __import__("pathlib").Path(__file__).resolve().parent.parent
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
+
 from config.settings import BRAND_COLOR, BRAND_NAME
 
 from agents.report_validation import ReportValidationEngine
@@ -548,8 +555,8 @@ class ReportAgent(BaseAgent):
         narrative = self._generate_strategic_narrative(self.ingestion, insight, score)
         # Headline separation
         sentences = narrative.split(". ")
-        headline = sentences[0] + "." if sentences else "Actionable intelligence detected across primary operational channels."
-        support = ". ".join(sentences[1:]) if len(sentences) > 1 else "Strategic alignment suggested to capitalize on identified variances."
+        headline = sentences[0] + "." if sentences else "No major findings detected in this dataset."
+        support = ". ".join(sentences[1:]) if len(sentences) > 1 else "Review the KPI section above for a detailed breakdown."
         
         story.append(Paragraph(f"<b>{headline}</b>", self.sty.body))
         story.append(Spacer(1, 8))
@@ -566,7 +573,7 @@ class ReportAgent(BaseAgent):
             r = insight.top_risks[0]
             risk_text = str(r.detail if hasattr(r, 'detail') else (r.get('detail', str(r)) if isinstance(r, dict) else str(r)))
             
-        opp_text = "Optimization potential detected in baseline metrics"
+        opp_text = "Review key metrics above for improvement opportunities"
         trends = [t for t in insight.trend_summary if t.direction != "stable"]
         if trends:
             t = trends[0]
@@ -796,7 +803,7 @@ class ReportAgent(BaseAgent):
         story.append(Spacer(1, 12))
         
         if not insight.business_recommendations:
-             story.append(Paragraph("No structural recommendations triggered by current data state. Operational consistency remains within baseline expectations.", self.sty.body))
+             story.append(Paragraph("No specific recommendations were generated for this dataset. The data appears stable with no significant anomalies or trends requiring action.", self.sty.body))
              story.append(Spacer(1, 20))
              return
              
@@ -831,13 +838,27 @@ class ReportAgent(BaseAgent):
             clean_rec = clean_rec[0].upper() + clean_rec[1:] if clean_rec else "Optimize primary performance driver."
             
             c_header = Paragraph(f"Strategic Objective: {clean_rec}", self.sty.h2)
-            c_meta = Paragraph(f"<font color={color}>Risk: {risk_level}</font> | Expected Impact: {impact}/10 | Horizon: {horizon}", self.sty.caption)
+            c_meta = Paragraph(f"<font color={color}>Risk Level: {risk_level}</font> | Time Horizon: {horizon}", self.sty.caption)
             c_conf = Paragraph(f"<b>Confidence:</b> {confidence}", self.sty.caption)
             
             table_data.append([c_header])
             table_data.append([c_meta])
             table_data.append([c_conf])
             table_data.append([Spacer(1, 16)])
+
+        if not table_data:
+            table_data.append([
+                Paragraph(
+                    "Strategic Objective: Continue monitoring the validated KPIs and review the next report for material changes.",
+                    self.sty.h2,
+                )
+            ])
+            table_data.append([
+                Paragraph(
+                    "<b>Confidence:</b> Baseline recommendation generated because no high-confidence strategic recommendation passed validation.",
+                    self.sty.caption,
+                )
+            ])
             
         t = Table(table_data, colWidths=[inch * 6.5])
         t.setStyle(TableStyle([
@@ -874,7 +895,7 @@ class ReportAgent(BaseAgent):
             t.daemon = True
             t.start()
             t.join(timeout)
-            return not t.is_alive()
+            return (not t.is_alive()) and Path(path).exists()
 
         _pcolor = BRAND_COLOR if BRAND_COLOR.startswith("#") else f"#{BRAND_COLOR}"
 
@@ -922,7 +943,7 @@ class ReportAgent(BaseAgent):
         p1 = (
             f"This strategic audit evaluates {row_count:,} operational signals within the {industry_label} sector. "
             f"The primary data structure exhibits a performance health score of {score}/100, indicating "
-            f"{'robust operational integrity' if score > 85 else ('moderate baseline stability' if score > 60 else 'significant structural variance')}. "
+            f"{'strong data quality' if score > 85 else ('acceptable data quality' if score > 60 else 'low data quality — review recommended')}. "
             "Internal metric distributions suggest that primary business levers are currently functioning within "
             "expected statistical parameters, though specific outliers require immediate attention."
         )
@@ -930,20 +951,20 @@ class ReportAgent(BaseAgent):
         # P2: Risk & Volatility
         volatility = "Moderate" if score > 60 else "High"
         p2 = (
-            f"The current {industry_label} landscape presents {volatility.lower()} levels of systemic volatility. "
-            "Our analysis of variance drivers identifies key performance sensitivities that could impact "
-            "long-term throughput if left unmanaged. While secondary signals remain independent, "
+            f"The current {industry_label} landscape presents {volatility.lower()} levels of sales variation. "
+            "Our analysis of key factors identifies performance factors that could impact "
+            "business performance if left unmanaged. While secondary signals remain independent, "
             "the concentration of risk in primary operational pillars suggests a need for targeted stability "
-            "measures to preserve current growth trajectories and minimize downside exposure."
+            "measures to preserve current growth trajectories and minimize risk."
         )
         
         # P3: Strategic Focus
         p3 = (
             "Focus this week on top performing segments to maintain growth. "
             "Immediate tactical reallocation of resources toward high-impact "
-            "variance drivers is advised. By aligning operational capacity with historical performance "
+            "key factors is advised. By aligning operational capacity with historical performance "
             "intensities, the organization can capitalize on emerging momentum while maintaining a "
-            "defensive posture against unmodeled volatility."
+            "defensive posture against unexpected changes."
         )
         
         return f"{p1}\n\n{p2}\n\n{p3}"

@@ -16,6 +16,7 @@ from api.routes.upload import router as upload_router
 from api.routes.download import router as download_router
 from api.routes.enterprise import router as enterprise_router
 from api.routes.status import router as status_router
+from api.routes.share import router as share_router
 from config.settings import BRAND_NAME, OUTPUT_DIR, is_llm_enabled
 
 # ── Logging ──────────────────────────────────────────────────────────
@@ -57,6 +58,7 @@ app.include_router(upload_router, prefix="/api", tags=["Upload & Analyze"])
 app.include_router(status_router, prefix="/api", tags=["Job Status"])
 app.include_router(download_router, prefix="/api", tags=["Downloads"])
 app.include_router(enterprise_router, prefix="/api/v1", tags=["Enterprise API"])
+app.include_router(share_router, tags=["Shared Reports"])
 
 
 @app.get("/", tags=["Health"])
@@ -83,4 +85,3 @@ async def mock_stream():
             "Category": random.choice(["Electronics", "Apparel", "Home"])
         })
     return records
-

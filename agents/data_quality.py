@@ -88,6 +88,50 @@ class DataQualityAgent(BaseAgent):
         types: Dict[str, str] = input_data.get("detected_types", {})
 
         total_rows, total_cols = df.shape
+
+        # ── Detect dataset type for dynamic thresholds ──────────────────
+        col_names_lower = [c.lower() for c in df.columns]
+        
+        is_financial = any(kw in c for c in col_names_lower 
+                           for kw in ['price', 'revenue', 'profit', 'close', 
+                                      'open', 'volume', 'return', 'yield'])
+        is_timeseries = any(kw in c for c in col_names_lower 
+                            for kw in ['timestamp', 'utc', '_at', '_date', 
+                                       '_time', 'epoch', 'created', 'updated'])
+        is_transactional = any(kw in c for c in col_names_lower 
+                               for kw in ['order', 'transaction', 'invoice', 
+                                          'payment', 'receipt'])
+        is_social = any(kw in c for c in col_names_lower 
+                        for kw in ['post', 'comment', 'subreddit', 'upvote', 
+                                   'reddit', 'tweet', 'like', 'share'])
+
+        # Dynamic thresholds based on dataset type
+        if is_financial:
+            dup_penalty_multiplier = 10     # duplicates are critical error
+            null_heavy_threshold = 10       # very strict
+            dup_weight, missing_weight = 0.30, 0.30
+        elif is_timeseries:
+            dup_penalty_multiplier = 8      # duplicates are serious
+            null_heavy_threshold = 20       # stricter missing tolerance
+            dup_weight, missing_weight = 0.25, 0.35
+        elif is_transactional:
+            dup_penalty_multiplier = 2      # duplicates more acceptable
+            null_heavy_threshold = 50       # higher tolerance for missing
+            dup_weight, missing_weight = 0.10, 0.25
+        elif is_social:
+            dup_penalty_multiplier = 3      # some duplicate posts ok
+            null_heavy_threshold = 40       # social data often sparse
+            dup_weight, missing_weight = 0.15, 0.25
+        else:
+            dup_penalty_multiplier = 5      # default (original behavior)
+            null_heavy_threshold = 30       # default
+            dup_weight, missing_weight = 0.20, 0.30
+
+        remaining = 1.0 - dup_weight - missing_weight
+        type_w    = round(remaining * (0.20 / 0.50), 4)
+        integrity_w = round(remaining * (0.15 / 0.50), 4)
+        variance_w  = round(remaining - type_w - integrity_w, 4)
+
         result = DataQualityResult(total_rows=total_rows, total_cols=total_cols)
 
         # ── 1) Missing values (30%) ──────────────────────────────────
@@ -104,7 +148,7 @@ class DataQualityAgent(BaseAgent):
         result.duplicate_percent = round(
             (dup_count / total_rows * 100) if total_rows else 0, 2
         )
-        result.sub_duplicates = max(0.0, 100.0 - result.duplicate_percent * 5)
+        result.sub_duplicates = max(0.0, 100.0 - result.duplicate_percent * dup_penalty_multiplier)
         # ×5 penalty: 10% duplicates → score 50, 20% → 0
 
         # ── 3) Type consistency (20%) ────────────────────────────────
@@ -133,7 +177,7 @@ class DataQualityAgent(BaseAgent):
         constant_cols: List[str] = []
         for col in df.columns:
             missing_pct = df[col].isnull().mean() * 100
-            if missing_pct > 30:
+            if missing_pct > null_heavy_threshold:
                 null_heavy.append(col)
             if df[col].nunique(dropna=True) <= 1:
                 constant_cols.append(col)
@@ -162,11 +206,11 @@ class DataQualityAgent(BaseAgent):
 
         # ── Weighted final score ─────────────────────────────────────
         result.quality_score = round(
-            result.sub_missing * WEIGHT_MISSING
-            + result.sub_duplicates * WEIGHT_DUPLICATES
-            + result.sub_type_consistency * WEIGHT_TYPE_CONSISTENCY
-            + result.sub_column_integrity * WEIGHT_COLUMN_INTEGRITY
-            + result.sub_variance_health * WEIGHT_VARIANCE_HEALTH,
+            result.sub_missing * missing_weight
+            + result.sub_duplicates * dup_weight
+            + result.sub_type_consistency * type_w
+            + result.sub_column_integrity * integrity_w
+            + result.sub_variance_health * variance_w,
             1,
         )
 
@@ -178,7 +222,7 @@ class DataQualityAgent(BaseAgent):
         # ── Problem columns roster ───────────────────────────────────
         problems: List[Dict[str, Any]] = []
         for col in null_heavy:
-            problems.append({"column": col, "issue": "null_heavy", "detail": f">{30}% missing"})
+            problems.append({"column": col, "issue": "null_heavy", "detail": f">{null_heavy_threshold}% missing"})
         for col in constant_cols:
             problems.append({"column": col, "issue": "constant", "detail": "single unique value"})
         for col in low_var:
@@ -186,8 +230,19 @@ class DataQualityAgent(BaseAgent):
         result.problem_columns = problems
 
         # ── Summary text ─────────────────────────────────────────────
+        if is_financial:
+            detected_type = "Financial"
+        elif is_timeseries:
+            detected_type = "Time-Series"
+        elif is_transactional:
+            detected_type = "Transactional"
+        elif is_social:
+            detected_type = "Social Media"
+        else:
+            detected_type = "General"
+
         result.summary_text = (
-            f"Data Quality Score: {result.quality_score}/100 ({result.risk_level} risk). "
+            f"[{detected_type} Dataset] Data Quality Score: {result.quality_score}/100 ({result.risk_level} risk). "
             f"{result.missing_percent}% missing, {result.duplicate_percent}% duplicates, "
             f"{result.schema_issues} schema issues, "
             f"{len(null_heavy)} null-heavy column(s), "

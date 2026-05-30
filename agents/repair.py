@@ -13,6 +13,7 @@ Output: RepairResult (decisions + human-readable reasoning)
 from __future__ import annotations
 
 import logging
+import sys
 from dataclasses import dataclass, field
 from typing import Any, Dict, List
 
@@ -21,6 +22,12 @@ import pandas as pd
 
 from agents.base import BaseAgent
 from agents.cleaning import CleaningResult
+
+# Ensure project root is on sys.path regardless of import order
+_PROJECT_ROOT = __import__("pathlib").Path(__file__).resolve().parent.parent
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
+
 from config.settings import LLM_PROVIDER
 
 logger = logging.getLogger(__name__)

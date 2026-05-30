@@ -41,12 +41,26 @@ JARGON_REPLACEMENTS: List[tuple] = [
 
 # ── Sector keyword map for auto-detection ─────────────────────────────────────
 _SECTOR_KEYWORDS: List[tuple] = [
-    # (keywords_list, sector_label)
-    (["complaint", "issue", "response", "grievance"], "Consumer Services"),
-    (["revenue", "sales", "amount", "price", "discount", "quantity"], "Retail & Commerce"),
-    (["patient", "diagnosis", "hospital", "treatment", "medication"], "Healthcare"),
-    (["transaction", "balance", "loan", "mortgage", "credit", "debit"], "Financial Services"),
-    (["product", "category", "channel", "order", "shipment"], "Retail & Commerce"),
+    # Format: (keywords_list, sector_label, match_type)
+    # Name-level patterns (Tier 1 - Highest priority, conf = 0.95)
+    (["reddit", "twitter", "comment", "tweet", "socialmedia", "instagram", "tiktok", "facebook"], "Social Media Analytics", "name"),
+    (["tsla", "aapl", "stock", "market", "trading", "crypto", "bitcoin", "portfolio", "equity"], "Financial Markets", "name"),
+    (["complaint", "feedback", "support", "ticket", "survey", "reviews"], "Consumer Services", "name"),
+    (["sales", "ecom", "retail", "store", "commerce", "shopify", "transaction", "orders"], "Retail & Commerce", "name"),
+    (["hospital", "patient", "clinical", "medical", "health", "covid", "disease"], "Healthcare", "name"),
+    (["loan", "credit", "bank", "finance", "mortgage", "payment"], "Financial Services", "name"),
+    (["employee", "attrition", "hr", "workforce", "salary", "hiring", "talent"], "HR & Workforce", "name"),
+    (["shipment", "delivery", "logistics", "supplychain", "warehouse", "freight", "route"], "Logistics", "name"),
+
+    # Column-level patterns (Tier 2 - Lower priority, conf = 0.85)
+    (["subreddit", "upvote", "downvote", "flair", "karma", "post", "comment", "thread", "reply", "submission", "author"], "Social Media Analytics", "column"),
+    (["ticker", "stock", "close", "open", "high", "low", "volume", "dividend", "yield"], "Financial Markets", "column"),
+    (["complaint", "issue", "response", "grievance", "resolved", "sentiment"], "Consumer Services", "column"),
+    (["revenue", "sales", "amount", "price", "discount", "quantity", "product", "category", "channel", "order", "shipment"], "Retail & Commerce", "column"),
+    (["patient", "diagnosis", "hospital", "treatment", "medication", "doctor", "admission"], "Healthcare", "column"),
+    (["transaction", "balance", "loan", "mortgage", "credit", "debit", "account", "interest"], "Financial Services", "column"),
+    (["employee", "attrition", "salary", "department", "tenure", "performance", "job"], "HR & Workforce", "column"),
+    (["shipment", "delivery", "carrier", "origin", "destination", "tracking", "warehouse", "shipping"], "Logistics", "column"),
 ]
 
 class IntelligenceEngine:
@@ -81,22 +95,104 @@ class IntelligenceEngine:
         return text
 
     # ── Sector Auto-Detection ────────────────────────────────────────
-    def _detect_sector(self, col_names: List[str]) -> str:
+    def _detect_sector(self, col_names: List[str], dataset_name: str = "") -> tuple[str, float]:
         """
-        Infers the business sector from dataset column names.
-        Returns a human-readable sector label, falling back to the
-        first meaningful column name + 'Analytics'.
+        Infers the business sector from dataset name or column names.
+        Returns a tuple of (sector_label, confidence_score).
         """
-        lowered = [c.lower().replace(" ", "_").replace("-", "_") for c in col_names]
-        for keywords, label in _SECTOR_KEYWORDS:
-            if any(kw in col for kw in keywords for col in lowered):
-                return label
+        # Stage 1a: Check dataset name first (Tier 1, conf = 0.95)
+        if dataset_name:
+            normalized_name = dataset_name.lower().replace(" ", "").replace("_", "").replace(".", "").replace("-", "")
+            for keywords, label, match_type in _SECTOR_KEYWORDS:
+                if match_type == "name":
+                    if any(kw in normalized_name for kw in keywords):
+                        return label, 0.95
+
+        # Stage 1b: Check column names (Tier 2, conf = 0.85)
+        lowered_cols = [c.lower().replace(" ", "").replace("_", "").replace(".", "").replace("-", "") for c in col_names]
+        for keywords, label, match_type in _SECTOR_KEYWORDS:
+            if match_type == "column":
+                if any(kw in col for kw in keywords for col in lowered_cols):
+                    return label, 0.85
+
         # Default: first non-trivial column name
         skip = {"index", "id", "unnamed", "row", "serial", "sr_no", "sl_no"}
         for col in col_names:
-            if col.lower().replace(" ", "_") not in skip:
-                return col.replace("_", " ").title() + " Analytics"
-        return "Business Analytics"
+            col_clean = col.lower().replace(" ", "_").replace("-", "_")
+            if col_clean not in skip:
+                # Sanitize column name: replace dots/underscores with spaces, title case
+                readable = col.replace(".", " ").replace("_", " ").title()
+                return f"{readable} Analytics", 0.60
+        return "General Analytics", 0.50
+
+    def _detect_sector_llm(self, col_names: List[str], dataset_name: str = "", sample_row: Optional[dict] = None) -> tuple[str, float]:
+        """
+        Uses the LLM to classify the business sector of the dataset.
+        Returns a tuple of (sector_label, confidence_score).
+        """
+        if not self.llm:
+            return "General Analytics", 0.0
+
+        system_prompt = (
+            "You are an expert Data Classifier. Your job is to analyze dataset metadata and determine its business sector.\n"
+            "Choose from one of these standard sectors if applicable:\n"
+            "- Social Media Analytics\n"
+            "- Financial Markets\n"
+            "- Consumer Services\n"
+            "- Retail & Commerce\n"
+            "- Healthcare\n"
+            "- Financial Services\n"
+            "- HR & Workforce\n"
+            "- Logistics\n"
+            "If none of these fit, generate a short, clean, descriptive sector name (max 3 words, ending with 'Analytics' or 'Services').\n\n"
+            "Respond ONLY with a JSON object matching this schema:\n"
+            "{\n"
+            '  "sector": "<sector_label>"\n'
+            "}"
+        )
+
+        user_prompt = f"Dataset Name: {dataset_name or 'Unknown'}\n"
+        user_prompt += f"Columns: {col_names}\n"
+        if sample_row:
+            user_prompt += f"Sample Row: {sample_row}\n"
+        user_prompt += "Determine the best business sector for this dataset."
+
+        try:
+            res = self.llm.generate_json(system_prompt, user_prompt)
+            if res and isinstance(res, dict) and "sector" in res:
+                sector = res["sector"].strip()
+                if sector:
+                    logger.info(f"LLM sector detection success: {sector}")
+                    return sector, 0.90
+            logger.warning("LLM sector detection returned invalid or empty JSON.")
+        except Exception as e:
+            logger.warning(f"LLM sector detection failed: {e}", exc_info=True)
+
+        return "General Analytics", 0.0
+
+    def detect_sector_hybrid(self, col_names: List[str], dataset_name: str = "", sample_row: Optional[dict] = None) -> str:
+        """
+        Two-stage hybrid sector detection.
+        Stage 1: Deterministic check with high priority on dataset name (conf >= 0.85).
+        Stage 2: Fallback to LLM-based classification if confidence < 0.85.
+        """
+        logger.info(f"Sector detection initiated for dataset: '{dataset_name}'")
+        
+        # Stage 1: Deterministic
+        sector, conf = self._detect_sector(col_names, dataset_name)
+        logger.info(f"Stage 1 (Deterministic) detected sector: '{sector}' with confidence {conf:.2f}")
+
+        # Stage 2: LLM Fallback
+        if conf < 0.85 and self.mode == "llm":
+            logger.info("Confidence < 0.85 and LLM is enabled. Escalating to Stage 2 (LLM classification)...")
+            llm_sector, llm_conf = self._detect_sector_llm(col_names, dataset_name, sample_row)
+            if llm_conf > 0.0:
+                logger.info(f"Stage 2 (LLM) detected sector: '{llm_sector}' with confidence {llm_conf:.2f}")
+                return self._remove_jargon(llm_sector)
+            else:
+                logger.warning("Stage 2 (LLM) failed. Falling back to Stage 1 result.")
+
+        return self._remove_jargon(sector)
 
     def generate_strategic_summary(self, context: dict) -> dict:
         """
@@ -107,6 +203,12 @@ class IntelligenceEngine:
             try:
                 result = self._generate_with_llm(context)
                 if result and isinstance(result, dict) and "executive_summary" in result:
+                    if "sector_name" not in result:
+                        dataset_name = context.get("dataset_name", "")
+                        col_names = context.get("dataset_columns", [])
+                        sample_rows = context.get("sample_rows", [])
+                        sample_row = sample_rows[0] if sample_rows else None
+                        result["sector_name"] = self.detect_sector_hybrid(col_names, dataset_name, sample_row)
                     return result
                 # If LLM returns None or invalid structure, use fallback
                 return self._generate_deterministic(context)
@@ -116,28 +218,66 @@ class IntelligenceEngine:
         else:
             return self._generate_deterministic(context)
 
-    def _generate_with_llm(self, context: dict) -> Optional[dict]:
-        """Builds structured prompt with actual dataset context and calls LLM."""
-        # Pull rich dataset context injected by InsightAgent
+    def _build_safe_prompt_context(self, context: dict) -> dict:
+        """
+        Compress context to stay under 1000 tokens for LLM input.
+        Prioritizes most important signals, truncates the rest.
+        """
         col_names   = context.get("dataset_columns", [])
         cat_top     = context.get("categorical_top_values", {})
         num_stats   = context.get("numeric_stats", {})
-        row_count   = context.get("row_count", "unknown")
         sample_rows = context.get("sample_rows", [])
+
+        # Cap columns to 15 most relevant
+        safe_cols = col_names[:15]
+        if len(col_names) > 15:
+            safe_cols.append(f"... and {len(col_names) - 15} more columns")
+
+        # Cap categories to top 3 columns, top 2 values each
+        safe_cat = {}
+        for col, vals in list(cat_top.items())[:3]:
+            safe_cat[col] = vals[:2]
+
+        # Cap numeric stats to top 3 columns only
+        safe_num = dict(list(num_stats.items())[:3])
+
+        # Cap sample rows to 1 row, max 5 keys per row
+        safe_sample = []
+        if sample_rows:
+            row = sample_rows[0]
+            keys = list(row.keys())[:5]
+            safe_sample = [{k: row[k] for k in keys}]
+
+        return {
+            "safe_cols":   safe_cols,
+            "safe_cat":    safe_cat,
+            "safe_num":    safe_num,
+            "safe_sample": safe_sample,
+        }
+
+    def _generate_with_llm(self, context: dict) -> Optional[dict]:
+        """Builds structured prompt with actual dataset context and calls LLM."""
+        # Compress context to safe token budget before building prompt
+        safe = self._build_safe_prompt_context(context)
+        col_names   = safe["safe_cols"]
+        cat_top     = safe["safe_cat"]
+        num_stats   = safe["safe_num"]
+        sample_rows = safe["safe_sample"]
+        row_count   = context.get("row_count", "unknown")
         blacklist   = context.get("jargon_blacklist", [])
 
-        # Build a compact data description so the LLM has concrete grounding
+        # Build compact data description (token-safe)
         cat_summary = "; ".join(
-            f"{col}: top values = {', '.join(vals[:3])}"
-            for col, vals in list(cat_top.items())[:5]
+            f"{col}: top values = {', '.join(str(v) for v in vals)}"
+            for col, vals in cat_top.items()
         ) or "(none)"
 
         num_summary = "; ".join(
-            f"{col}: total={s.get('sum')}, avg={s.get('mean')}, range {s.get('min')}–{s.get('max')}"
-            for col, s in list(num_stats.items())[:4]
+            f"{col}: total={s.get('sum')}, avg={s.get('mean')}, "
+            f"range {s.get('min')}–{s.get('max')}"
+            for col, s in num_stats.items()
         ) or "(none)"
 
-        # Embed the blacklist directly in the prompt so the LLM knows what is forbidden
         blacklist_str = ", ".join(f'"{w}"' for w in blacklist) if blacklist else "(none)"
 
         system_prompt = (
@@ -169,7 +309,7 @@ class IntelligenceEngine:
             f"Dataset: {row_count} rows, columns: {col_names}\n"
             f"Categories: {cat_summary}\n"
             f"Numbers: {num_summary}\n"
-            f"Sample rows: {sample_rows[:3]}\n"
+            f"Sample row: {sample_rows}\n"
             f"Overall trend: {context.get('trend_direction', 'Stable')}, "
             f"confidence: {context.get('confidence_level', 'Medium')}\n"
             "Write the strategic summary JSON now."
@@ -223,7 +363,7 @@ class IntelligenceEngine:
             if trend == "Upward":
                 s3 = f"Increase stock and marketing budget for '{top_cat_val}' this week to capitalise on the upward trend."
             elif trend == "Downward":
-                s3 = f"Review pricing and promotions for underperforming segments in '{top_cat_col}' this week."
+                s3 = f"Review performance trends for underperforming segments in '{top_cat_col}' this week."
             else:
                 s3 = f"Focus this week on growing the '{top_cat_val}' segment, which currently drives the most revenue."
             exec_sum = f"{s1} {s2} {s3}"
@@ -267,7 +407,10 @@ class IntelligenceEngine:
             opp = "Focus on baseline stability and efficiency optimization across top-performing segments."
 
         # ── Sector name via auto-detection (never hardcoded) ──────────
-        sector = self._detect_sector(col_names)
+        dataset_name = context.get("dataset_name", "")
+        sample_rows = context.get("sample_rows", [])
+        sample_row = sample_rows[0] if sample_rows else None
+        sector = self.detect_sector_hybrid(col_names, dataset_name, sample_row)
 
         # ── Jargon filter on ALL text fields before returning ─────────
         return {

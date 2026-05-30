@@ -30,6 +30,7 @@ from agents.data_quality import score_color, risk_level
 from utils.auth import login_user, signup_user, save_session_token, load_session_token, delete_session_token, get_supabase_client
 from utils.workspace import create_organization, get_organizations, add_analysis_run, get_org_analysis_history
 from utils.storage import upload_to_r2, LOCAL_STORAGE_DIR
+from utils.share_reports import create_share_link, revoke_share_link
 
 def load_analysis_result_from_storage(output_path: str):
     """
@@ -147,10 +148,39 @@ def show_landing_page():
         unsafe_allow_html=True,
     )
 
-    # CTA
-    if st.button("🚀 Try Free — No Credit Card", type="primary", use_container_width=True, key="landing_cta_btn"):
-        st.session_state["show_auth"] = True
-        st.rerun()
+    st.markdown("### See real output before signup")
+    proof_cols = st.columns(3)
+    with proof_cols[0]:
+        st.markdown("**Dashboard**")
+        st.caption("KPI cards, filters, charts, and forecast panels from the bundled retail sample.")
+    with proof_cols[1]:
+        st.markdown("**PDF report**")
+        st.caption("A client-ready report generated from the same deterministic pipeline.")
+    with proof_cols[2]:
+        st.markdown("**Excel workbook**")
+        st.caption("Cleaned data, KPI summary, insights, and forecasts in a formatted spreadsheet.")
+
+    cta_col1, cta_col2 = st.columns(2)
+    with cta_col1:
+        if st.button("📂 Try Demo With Sample Data", type="primary", use_container_width=True, key="landing_demo_btn"):
+            st.session_state["demo_mode"] = True
+            st.session_state["user"] = {
+                "id": "demo-user",
+                "email": "demo@ai-data-analyzer.local",
+                "type": "demo",
+            }
+            st.session_state["sample_dataset_path"] = str(ROOT / "data" / "sample_walmart.csv")
+            st.session_state["sample_dataset_name"] = "sample_walmart.csv"
+            st.session_state["demo_autorun_pending"] = True
+            st.rerun()
+
+    with cta_col2:
+        if st.button("🔑 Sign In / Create Account", use_container_width=True, key="landing_cta_btn"):
+            st.session_state["show_auth"] = True
+            st.rerun()
+
+    if st.session_state.get("demo_mode"):
+        st.info("Demo mode uses bundled sample data and does not write to shared workspace history.")
 
 
 # ── UI-2: Load Sample Dataset ─────────────────────────────────────────
@@ -295,7 +325,9 @@ if "user" not in st.session_state:
     st.stop()
 
 # Ensure an active organization is loaded in session state
-if "active_org" not in st.session_state:
+if st.session_state.get("demo_mode"):
+    st.session_state["active_org"] = {"id": "demo", "name": "Demo Workspace"}
+elif "active_org" not in st.session_state:
     if "orgs" not in st.session_state:
         st.session_state["orgs"] = get_organizations()
     orgs = st.session_state["orgs"]
@@ -337,7 +369,10 @@ with st.sidebar:
     st.markdown("---")
     
     # Collapsible groups for Sidebar settings
-    with st.expander("🏢 Team Workspace", expanded=False):
+    if st.session_state.get("demo_mode"):
+        st.info("Demo mode is read-only for workspace history. Create an account to save private analyses.")
+    else:
+      with st.expander("🏢 Team Workspace", expanded=False):
         # ── Workspace Switcher & Creator ─────────────────────────────────
         if "orgs" not in st.session_state:
             st.session_state["orgs"] = get_organizations()
@@ -816,6 +851,9 @@ with tab_upload:
         # ── EXECUTION BLOCK ──────────────────────────────────────────────
         st.caption("⏱️ Estimated time: 10-15 seconds for datasets under 10MB")
         run_clicked = st.button("🚀 Run Full Analysis", type="primary", use_container_width=True)
+        if st.session_state.pop("demo_autorun_pending", False):
+            run_clicked = True
+            st.info("Running the demo analysis with bundled sample data...")
         
         if run_clicked or "celery_task_id" in st.session_state:
             # Clear previous state
@@ -972,14 +1010,15 @@ with tab_upload:
                         public_url = upload_to_r2(pickle_path, storage_key)
                         active_org = st.session_state.get("active_org", {"id": "default"})
                         user_info_ws = st.session_state.get("user", {"id": "anonymous"})
-                        dataset_name = uploaded_file.name if uploaded_file else "database_query_result.csv"
-                        add_analysis_run(
-                            org_id=active_org["id"],
-                            user_id=user_info_ws["id"],
-                            dataset_name=dataset_name,
-                            status="completed",
-                            output_path=public_url,
-                        )
+                        dataset_name = uploaded_file.name if uploaded_file else temp_path.name
+                        if not st.session_state.get("demo_mode"):
+                            add_analysis_run(
+                                org_id=active_org["id"],
+                                user_id=user_info_ws["id"],
+                                dataset_name=dataset_name,
+                                status="completed",
+                                output_path=public_url,
+                            )
                     except Exception as persist_err:
                         print(f"Workspace persist error (non-fatal): {persist_err}")
                         
@@ -988,6 +1027,8 @@ with tab_upload:
 
                     # STORE RESULT IN SESSION STATE
                     st.session_state["analysis_result"] = result
+                    st.session_state["analysis_dataset_name"] = dataset_name
+                    st.session_state["analysis_pickle_path"] = str(pickle_path)
                     st.session_state["analysis_complete"] = True
                     save_to_history(dataset_name, result)
                     status.update(label="✅ Analysis Complete!", state="complete")
@@ -1008,7 +1049,7 @@ with tab_upload:
     if st.session_state.get("analysis_complete") and st.session_state.get("analysis_result"):
         result = st.session_state["analysis_result"]
 
-        if result.status == "completed":
+        if result.status in ("completed", "completed_with_warnings"):
             from frontend.dashboard_ui import render_interactive_dashboard
             
             # Use new modular dashboard
@@ -1018,7 +1059,7 @@ with tab_upload:
 
             # ── Downloads (PERSISTENT BUTTONS) ───────────────────
             st.markdown("### 📥 Download Results")
-            dl_cols = st.columns(4)
+            dl_cols = st.columns(5)
 
             # Check files exist on disk (pipeline saves them)
             # Using paths from stored result object
@@ -1062,6 +1103,52 @@ with tab_upload:
                         mime="text/markdown",
                         use_container_width=True,
                     )
+
+            if getattr(result, "excel_report_path", "") and Path(result.excel_report_path).exists():
+                with dl_cols[4]:
+                    st.download_button(
+                        "📗 Excel Report",
+                        data=Path(result.excel_report_path).read_bytes(),
+                        file_name="analysis_report.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        use_container_width=True,
+                    )
+
+            st.markdown("### 🔗 Share Report")
+            share_disabled = result.status not in ("completed", "completed_with_warnings")
+            if st.button("Create Read-Only Share Link", use_container_width=True, disabled=share_disabled):
+                try:
+                    user_info = st.session_state.get("user", {"id": "anonymous"})
+                    dataset_name_for_share = st.session_state.get("analysis_dataset_name", "analysis_report")
+                    plan = "free"
+                    share_record = create_share_link(
+                        result=result,
+                        owner_user_id=user_info.get("id", "anonymous"),
+                        dataset_name=dataset_name_for_share,
+                        plan=plan,
+                    )
+                    st.session_state["latest_share_token"] = share_record["share_token"]
+                    st.session_state["latest_share_url"] = share_record["url"]
+                    st.success("Share link created.")
+                except Exception as share_exc:
+                    st.error(f"Could not create share link: {share_exc}")
+
+            if st.session_state.get("latest_share_url"):
+                st.text_input(
+                    "Copy share link",
+                    value=st.session_state["latest_share_url"],
+                    key="latest_share_url_display",
+                )
+                if st.button("Disable This Share Link", use_container_width=True):
+                    token = st.session_state.get("latest_share_token", "")
+                    user_info = st.session_state.get("user", {"id": "anonymous"})
+                    if token and revoke_share_link(token, user_info.get("id")):
+                        st.success("Share link disabled.")
+                        st.session_state.pop("latest_share_url", None)
+                        st.session_state.pop("latest_share_token", None)
+                        st.rerun()
+                    else:
+                        st.warning("No active share link was found to disable.")
 
             # Duration info
             st.caption(
@@ -1379,9 +1466,8 @@ with tab_stream:
 
     if st.session_state.get("gsheets_live_result") is not None:
         _gs_res = st.session_state["gsheets_live_result"]
-        if _gs_res.status == "completed":
+        if _gs_res.status in ("completed", "completed_with_warnings"):
             from frontend.dashboard_ui import render_interactive_dashboard
             render_interactive_dashboard(_gs_res)
         else:
             st.error(f"❌ Pipeline failed: {', '.join(_gs_res.errors)}")
-

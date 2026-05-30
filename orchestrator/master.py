@@ -55,6 +55,7 @@ class PipelineResult:
     dashboard_html_path: str = ""
     pdf_report_path: str = ""
     markdown_report_path: str = ""
+    excel_report_path: str = ""
 
     # Logs
     agent_logs: List[Dict[str, Any]] = field(default_factory=list)
@@ -76,6 +77,7 @@ class PipelineResult:
             "dashboard_html": self.dashboard_html_path,
             "pdf_report": self.pdf_report_path,
             "markdown_report": self.markdown_report_path,
+            "excel_report": self.excel_report_path,
             "recommendations": (
                 self.insight.business_recommendations if self.insight else []
             ),
@@ -102,13 +104,12 @@ class MasterOrchestrator:
         start = time.perf_counter()
 
         try:
-            # ── 1) Ingestion ─────────────────────────────────────────
+            # ── 1) Ingestion [CRITICAL] ──────────────────────────────
             if progress_callback:
                 progress_callback("Ingesting data...", 0.05)
             ingestion_agent = IngestionAgent()
             ingestion_result: IngestionResult = ingestion_agent.run(csv_path)
-            
-            # Handle large datasets by downsampling for stable downstream processing
+
             from config.settings import MAX_ROWS_FULL
             if ingestion_result.row_count > MAX_ROWS_FULL:
                 logger.info(
@@ -119,109 +120,137 @@ class MasterOrchestrator:
                 ingestion_result.dataframe = ingestion_result.dataframe.sample(
                     n=MAX_ROWS_FULL, random_state=42
                 ).reset_index(drop=True)
-                
+
             result.ingestion = ingestion_result
             result.agent_logs.append(self._log_entry(ingestion_agent))
 
-            # ── 2) Data Quality BEFORE cleaning ──────────────────────
+            # ── 2) Data Quality BEFORE [CRITICAL] ───────────────────
             if progress_callback:
                 progress_callback("Assessing data quality...", 0.15)
             dq_before_agent = DataQualityAgent()
-            quality_before: DataQualityResult = dq_before_agent.run({
-                "dataframe": ingestion_result.dataframe,
-                "detected_types": ingestion_result.detected_types,
-            })
-            result.quality_before = quality_before
-            result.agent_logs.append(self._log_entry(dq_before_agent))
+            quality_before: DataQualityResult = self._safe_run(
+                dq_before_agent,
+                {"dataframe": ingestion_result.dataframe,
+                 "detected_types": ingestion_result.detected_types},
+                result, "quality_before", critical=True
+            )
 
-            # ── 3) Cleaning ──────────────────────────────────────────
+            # ── 3) Cleaning [CRITICAL] ───────────────────────────────
             if progress_callback:
                 progress_callback("Cleaning & deduplicating...", 0.30)
             cleaning_agent = CleaningAgent()
-            cleaning_result: CleaningResult = cleaning_agent.run(ingestion_result)
-            result.cleaning = cleaning_result
-            result.agent_logs.append(self._log_entry(cleaning_agent))
+            cleaning_result: CleaningResult = self._safe_run(
+                cleaning_agent, ingestion_result,
+                result, "cleaning", critical=True
+            )
 
-            # ── 4) Repair ────────────────────────────────────────────
+            # ── 4) Repair [CRITICAL] ─────────────────────────────────
             if progress_callback:
                 progress_callback("Applying intelligent repairs...", 0.45)
             repair_agent = RepairReasoningAgent()
-            repair_result: RepairResult = repair_agent.run(cleaning_result)
-            result.repair = repair_result
-            result.agent_logs.append(self._log_entry(repair_agent))
+            repair_result: RepairResult = self._safe_run(
+                repair_agent, cleaning_result,
+                result, "repair", critical=True
+            )
 
-            # ── 5) Data Quality AFTER cleaning ───────────────────────
+            # ── 5) Data Quality AFTER [CRITICAL] ────────────────────
             if progress_callback:
                 progress_callback("Re-assessing quality...", 0.55)
             dq_after_agent = DataQualityAgent()
-            quality_after: DataQualityResult = dq_after_agent.run({
-                "dataframe": repair_result.dataframe,
-                "detected_types": cleaning_result.detected_types,
-            })
-            result.quality_after = quality_after
-            result.agent_logs.append(self._log_entry(dq_after_agent))
+            quality_after: DataQualityResult = self._safe_run(
+                dq_after_agent,
+                {"dataframe": repair_result.dataframe,
+                 "detected_types": cleaning_result.detected_types},
+                result, "quality_after", critical=True
+            )
 
-            # ── 6) Insight ───────────────────────────────────────────
+            # ── 6) Insight [CRITICAL] ────────────────────────────────
             if progress_callback:
                 progress_callback("Generating insights...", 0.65)
             insight_agent = InsightAgent()
-            insight_result: InsightResult = insight_agent.run(repair_result)
-            result.insight = insight_result
-            result.agent_logs.append(self._log_entry(insight_agent))
+            insight_result: InsightResult = self._safe_run(
+                insight_agent,
+                {"repair": repair_result,
+                 "dataset_name": dataset_name,
+                 "sample_row": repair_result.dataframe.iloc[0].to_dict() if not repair_result.dataframe.empty else {}},
+                result, "insight", critical=True
+            )
 
-            # ── 6b) Forecast ─────────────────────────────────────────
+            # ── 6b) Forecast [NON-CRITICAL] ──────────────────────────
             if progress_callback:
                 progress_callback("Running forecast model...", 0.75)
             forecast_agent = ForecastAgent()
-            forecast_result: ForecastResult = forecast_agent.run({
-                "repair": repair_result,
-                "insight": insight_result
-            })
-            result.forecast = forecast_result
-            result.agent_logs.append(self._log_entry(forecast_agent))
+            forecast_result: ForecastResult = self._safe_run(
+                forecast_agent,
+                {"repair": repair_result, "insight": insight_result},
+                result, "forecast", critical=False
+            )
 
             # ── 7) Save cleaned CSV ──────────────────────────────────
-            cleaned_path = output_dir / "cleaned_data.csv"
-            repair_result.dataframe.to_csv(cleaned_path, index=False)
-            result.cleaned_csv_path = str(cleaned_path)
+            try:
+                cleaned_path = output_dir / "cleaned_data.csv"
+                repair_result.dataframe.to_csv(cleaned_path, index=False)
+                result.cleaned_csv_path = str(cleaned_path)
+            except Exception as exc:
+                result.errors.append(f"CSV save failed: {exc}")
+                logger.warning("Could not save cleaned CSV: %s", exc)
 
-            # ── 8) Dashboard ─────────────────────────────────────────
+            # ── 8) Dashboard [NON-CRITICAL] ──────────────────────────
             if progress_callback:
                 progress_callback("Building dashboard...", 0.85)
             dashboard_agent = DashboardAgent()
-            dash_result: DashboardResult = dashboard_agent.run({
-                "insight": insight_result,
-                "forecast": forecast_result,
-                "quality_before": quality_before,
-                "quality_after": quality_after,
-                "output_dir": output_dir,
-            })
-            result.dashboard = dash_result
-            result.dashboard_html_path = dash_result.html_path
-            result.agent_logs.append(self._log_entry(dashboard_agent))
+            dash_result: DashboardResult = self._safe_run(
+                dashboard_agent,
+                {"insight": insight_result,
+                 "forecast": forecast_result or {},
+                 "quality_before": quality_before,
+                 "quality_after": quality_after,
+                 "output_dir": output_dir},
+                result, "dashboard", critical=False
+            )
+            if dash_result:
+                result.dashboard_html_path = dash_result.html_path
 
-            # ── 9) Report ────────────────────────────────────────────
+            # ── 9) Excel Export [NON-CRITICAL] ───────────────────────
+            try:
+                from utils.excel_export import build_excel_report
+
+                excel_path = output_dir / "analysis_report.xlsx"
+                result.excel_report_path = build_excel_report(
+                    cleaned_df=repair_result.dataframe,
+                    insights=insight_result,
+                    forecasts=forecast_result,
+                    quality_result=quality_after,
+                    brand_config=branding,
+                    output_path=excel_path,
+                )
+            except Exception as exc:
+                result.errors.append(f"Excel export failed: {exc}")
+                logger.warning("Could not save Excel report: %s", exc)
+
+            # ── 10) Report [NON-CRITICAL] ────────────────────────────
             if progress_callback:
                 progress_callback("Creating PDF/Markdown reports...", 0.95)
             report_agent = ReportAgent()
-            report_result: ReportResult = report_agent.run({
-                "ingestion": ingestion_result,
-                "cleaning": cleaning_result,
-                "repair": repair_result,
-                "insight": insight_result,
-                "forecast": forecast_result,
-                "quality_before": quality_before,
-                "quality_after": quality_after,
-                "output_dir": output_dir,
-                "branding": branding,
-                "dataset_name": dataset_name,
-            })
-            result.report = report_result
-            result.pdf_report_path = report_result.pdf_path
-            result.markdown_report_path = report_result.markdown_path
-            result.agent_logs.append(self._log_entry(report_agent))
+            report_result: ReportResult = self._safe_run(
+                report_agent,
+                {"ingestion": ingestion_result,
+                 "cleaning": cleaning_result,
+                 "repair": repair_result,
+                 "insight": insight_result,
+                 "forecast": forecast_result or {},
+                 "quality_before": quality_before,
+                 "quality_after": quality_after,
+                 "output_dir": output_dir,
+                 "branding": branding,
+                 "dataset_name": dataset_name},
+                result, "report", critical=False
+            )
+            if report_result:
+                result.pdf_report_path = report_result.pdf_path
+                result.markdown_report_path = report_result.markdown_path
 
-            result.status = "completed"
+            result.status = "completed" if not result.errors else "completed_with_warnings"
 
         except Exception as exc:
             result.status = "failed"
@@ -234,6 +263,26 @@ class MasterOrchestrator:
             job_id, result.status, result.total_duration_seconds,
         )
         return result
+
+    def _safe_run(self, agent, input_data, result, field_name: str, 
+                  critical: bool = False):
+        """Run an agent with isolated error handling.
+        
+        If critical=True, re-raises exception (pipeline stops).
+        If critical=False, logs warning and continues with None result.
+        """
+        try:
+            output = agent.run(input_data)
+            setattr(result, field_name, output)
+            result.agent_logs.append(self._log_entry(agent))
+            return output
+        except Exception as exc:
+            error_msg = f"{agent.__class__.__name__} failed: {exc}"
+            result.errors.append(error_msg)
+            logger.warning(error_msg, exc_info=True)
+            if critical:
+                raise
+            return None
 
     @staticmethod
     def _log_entry(agent) -> Dict[str, Any]:

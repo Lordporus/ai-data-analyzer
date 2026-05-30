@@ -37,6 +37,8 @@ FORECAST_EXCLUDE = [
     'id', 'cust_id', 'order_id', 'customer_id', 'index',
     'postal_code', 'zip', 'pincode', 'phone', 'mobile',
     'sr_no', 'serial', 'row_number', 'unnamed',
+    'utc', 'timestamp', 'epoch', 'unix', 'created_at', 'updated_at',
+    'modified_at', 'created', 'updated', 'modified'
 ]
 
 
@@ -91,6 +93,13 @@ class ForecastAgent(BaseAgent):
 
             # 2. Identify Metrics to Forecast — business columns only
             num_cols = [c for c, t in types.items() if t == "numeric"]
+            # Filter out timestamp columns — same logic as InsightAgent
+            _ts_keywords = ['utc', 'timestamp', '_at', '_date', '_time',
+                            'epoch', 'unix', 'created', 'updated', 'modified']
+            num_cols = [
+                c for c in num_cols
+                if not any(kw in c.lower() for kw in _ts_keywords)
+            ]
             forecastable = [
                 c for c in num_cols
                 if self._is_forecastable_column(c, df[c])

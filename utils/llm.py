@@ -7,8 +7,15 @@ for strategic reasoning and report generation.
 import json
 import logging
 import os
+import sys
 import requests
+from pathlib import Path
 from typing import Dict, Any, Optional
+
+# Ensure project root is on sys.path regardless of import order
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
 
 from config.settings import (
     LLM_PROVIDER, LLM_API_KEY, LLM_MODEL, LLM_ENDPOINT

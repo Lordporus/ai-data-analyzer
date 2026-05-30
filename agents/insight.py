@@ -114,9 +114,18 @@ class InsightAgent(BaseAgent):
         super().__init__()
         self.intelligence_engine = IntelligenceEngine()
 
-    def _execute(self, input_data: RepairResult) -> InsightResult:
-        df = input_data.dataframe.copy()
-        types = input_data.detected_types
+    def _execute(self, input_data: Any) -> InsightResult:
+        if isinstance(input_data, dict):
+            repair = input_data.get("repair")
+            dataset_name = input_data.get("dataset_name", "")
+            sample_row = input_data.get("sample_row", None)
+        else:
+            repair = input_data
+            dataset_name = ""
+            sample_row = repair.dataframe.iloc[0].to_dict() if not repair.dataframe.empty else {}
+
+        df = repair.dataframe.copy()
+        types = repair.detected_types
 
         # Filter out identifier/system columns before ALL downstream analysis
         df = self._filter_business_columns(df)
@@ -124,6 +133,20 @@ class InsightAgent(BaseAgent):
         num_cols = [c for c, t in types.items() if t == "numeric" and c in df.columns]
         cat_cols = [c for c, t in types.items() if t == "categorical" and c in df.columns]
         date_cols = [c for c, t in types.items() if t == "datetime" and c in df.columns]
+        # Filter out Unix timestamp columns from numeric analysis
+        timestamp_cols = [c for c in num_cols if self._is_timestamp_column(c, df[c])]
+        if timestamp_cols:
+            logger.info("InsightAgent: detected timestamp columns, excluding from numeric analysis: %s", timestamp_cols)
+        num_cols = [c for c in num_cols if c not in timestamp_cols]
+
+        # Convert detected timestamp columns to readable datetime and store date range
+        for ts_col in timestamp_cols:
+            try:
+                df[ts_col] = pd.to_datetime(df[ts_col], unit='s', errors='coerce')
+                if ts_col not in date_cols:
+                    date_cols.append(ts_col)
+            except Exception:
+                pass
 
         kpis = self._compute_kpis(df, num_cols, cat_cols)
         trends = self._detect_trends(df, num_cols, date_cols)
@@ -186,6 +209,7 @@ class InsightAgent(BaseAgent):
             "numeric_stats": numeric_stats,
             "row_count": len(df),
             "sample_rows": sample_rows,
+            "dataset_name": dataset_name,
             # Jargon control
             "jargon_blacklist": JARGON_BLACKLIST,
         }
@@ -255,7 +279,7 @@ class InsightAgent(BaseAgent):
             primary_risk=narrative["primary_risk"],
             primary_opportunity=narrative["primary_opportunity"],
             confidence_comment=narrative["confidence_comment"],
-            sector_name=self._detect_sector(df),
+            sector_name=self.intelligence_engine.detect_sector_hybrid(df.columns.tolist(), dataset_name, sample_row),
             key_relationships=filtered_corrs,
             detected_types=types,
             dataframe=df,
@@ -280,26 +304,30 @@ class InsightAgent(BaseAgent):
             logger.debug("InsightAgent: dropped identifier columns: %s", dropped)
         return df[cols_to_keep]
 
-    def _detect_sector(self, df: pd.DataFrame) -> str:
-        """Infers business sector from dataset column names."""
-        col_names = [c.lower() for c in df.columns]
-        
-        # Keyword mapping
-        if any(k in c for c in col_names for k in ["complaint", "product", "issue", "response"]):
-            return "Consumer Services"
-        if any(k in c for c in col_names for k in ["revenue", "sales", "amount", "price"]):
-            return "Retail & Commerce"
-        if any(k in c for c in col_names for k in ["patient", "diagnosis", "hospital"]):
-            return "Healthcare"
-        if any(k in c for c in col_names for k in ["transaction", "balance", "loan", "mortgage"]):
-            return "Financial Services"
-            
-        # Default: first meaningful column name + "Analytics"
-        skip = {"index", "id", "unnamed", "row", "serial", "sr_no", "sl_no"}
-        for col in df.columns:
-            if col.lower().replace(" ", "_") not in skip:
-                return col.replace("_", " ").title() + " Analytics"
-        return "Business Analytics"
+    def _is_timestamp_column(self, col: str, series: pd.Series) -> bool:
+        """
+        Detect Unix timestamp columns by name pattern OR value range.
+        Returns True if column should be excluded from numeric KPI analysis.
+        """
+        # Name-based detection
+        timestamp_keywords = [
+            'utc', 'timestamp', '_at', '_date', '_time',
+            'epoch', 'unix', 'created', 'updated', 'modified'
+        ]
+        col_lower = col.lower().replace(' ', '_').replace('-', '_')
+        if any(kw in col_lower for kw in timestamp_keywords):
+            return True
+
+        # Value-range-based detection (Unix epoch: ~2001 to ~2286)
+        if pd.api.types.is_numeric_dtype(series):
+            non_null = series.dropna()
+            if len(non_null) > 0:
+                median_val = non_null.median()
+                if 1_000_000_000 <= median_val <= 9_999_999_999:
+                    return True
+
+        return False
+
 
     def _clean_insight_text(self, text: str, df: pd.DataFrame) -> str:
         """
@@ -356,7 +384,7 @@ class InsightAgent(BaseAgent):
     ) -> List[KPI]:
         kpis: List[KPI] = [
             KPI("Total Rows", len(df), "rows", "Number of records in the dataset"),
-            KPI("Total Columns", len(df.columns), "cols", "Number of features"),
+
         ]
 
         for col in num_cols[:10]:  # limit to first 10 for readability
@@ -537,7 +565,7 @@ class InsightAgent(BaseAgent):
             recs.append(
                 f"💰 **{col}**: total = {_fmt(total)}, avg per record = {_fmt(avg)}, "
                 f"range = {_fmt(float(col_data.min()))}–{_fmt(float(col_data.max()))}. "
-                "Use this as a baseline for goal-setting."
+                f"Benchmark against historical average of {_fmt(avg)} per record."
             )
 
         # 3. Trending columns — name the column explicitly, skip slope jargon

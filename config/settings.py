@@ -20,6 +20,7 @@ OUTPUT_DIR.mkdir(exist_ok=True)
 API_HOST = os.getenv("API_HOST", "0.0.0.0")
 API_PORT = int(os.getenv("API_PORT", "8000"))
 STREAMLIT_PORT = int(os.getenv("STREAMLIT_PORT", "8501"))
+APP_BASE_URL = os.getenv("APP_BASE_URL", f"http://localhost:{API_PORT}")
 
 # ── Limits ───────────────────────────────────────────────────────────────
 MAX_FILE_SIZE_MB = int(os.getenv("MAX_FILE_SIZE_MB", "50"))
@@ -61,3 +62,9 @@ API_KEY_ENTERPRISE = os.getenv("API_KEY_ENTERPRISE", "")
 
 # ── Usage tracking ───────────────────────────────────────────────────────
 ENABLE_USAGE_TRACKING = os.getenv("ENABLE_USAGE_TRACKING", "false").lower() == "true"
+
+# ── Billing / Stripe (optional) ───────────────────────────────────────
+STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "")
+STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
+STRIPE_PRO_PRICE_ID = os.getenv("STRIPE_PRO_PRICE_ID", "")
+STRIPE_TEAM_PRICE_ID = os.getenv("STRIPE_TEAM_PRICE_ID", "")

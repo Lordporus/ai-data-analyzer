@@ -14,6 +14,12 @@ import plotly.graph_objects as go
 import plotly.express as px
 from typing import Dict, Any, List, Optional
 from pathlib import Path
+import sys
+
+# Ensure project root is on sys.path regardless of import order
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
 
 from config.settings import BRAND_COLOR, BRAND_NAME
 from orchestrator.master import PipelineResult

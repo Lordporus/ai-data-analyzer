@@ -18,6 +18,7 @@ FILE_MAP = {
     "pdf": ("report.pdf", "application/pdf"),
     "html": ("dashboard.html", "text/html"),
     "md": ("report.md", "text/markdown"),
+    "xlsx": ("analysis_report.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
 }
 
 

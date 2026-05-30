@@ -29,7 +29,7 @@ def get_job_status(job_id: str):
             return response
             
         status = result.get("status", "failed")
-        if status == "completed":
+        if status in ("completed", "completed_with_warnings"):
             response["status"] = "completed"
             
             output_dir_str = result.get("output_dir", "")
@@ -45,6 +45,7 @@ def get_job_status(job_id: str):
                     "dashboard_html": f"{base}/dashboard.html",
                     "pdf_report": f"{base}/report.pdf",
                     "markdown_report": f"{base}/report.md",
+                    "excel_report": f"{base}/analysis_report.xlsx",
                 }
             }
         else:

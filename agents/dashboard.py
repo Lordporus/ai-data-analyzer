@@ -9,6 +9,7 @@ Output: DashboardResult (path to HTML dashboard)
 from __future__ import annotations
 
 import logging
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List
@@ -16,6 +17,11 @@ from typing import Dict, List
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+
+# Ensure project root is on sys.path regardless of import order
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
 
 from agents.base import BaseAgent
 from agents.insight import InsightResult
@@ -49,6 +55,21 @@ class DashboardAgent(BaseAgent):
         df = insight.dataframe
         types = insight.detected_types
         num_cols = [c for c, t in types.items() if t == "numeric" and c in df.columns]
+        # Filter out timestamp columns — same logic as InsightAgent
+        # (detected_types may still mark them as numeric)
+        _ts_keywords = ['utc', 'timestamp', '_at', '_date', '_time',
+                        'epoch', 'unix', 'created', 'updated', 'modified']
+        num_cols = [
+            c for c in num_cols
+            if not any(kw in c.lower() for kw in _ts_keywords)
+        ]
+        # Also restrict to columns actually present in correlation matrix
+        # to prevent KeyError if InsightAgent excluded any column
+        if insight.correlation_matrix is not None:
+            _corr_cols = set(insight.correlation_matrix.columns)
+            _safe_num_cols = [c for c in num_cols if c in _corr_cols]
+        else:
+            _safe_num_cols = num_cols
         cat_cols = [c for c, t in types.items() if t == "categorical" and c in df.columns]
 
         figures: List[str] = []
@@ -100,7 +121,7 @@ class DashboardAgent(BaseAgent):
             chart_count += 1
 
         # ── Correlation heatmap ──────────────────────────────────────
-        if insight.correlation_matrix is not None and len(num_cols) >= 2:
+        if insight.correlation_matrix is not None and len(_safe_num_cols) >= 2:
             corr = insight.correlation_matrix
             fig = go.Figure(go.Heatmap(
                 z=corr.values, x=corr.columns.tolist(),
@@ -120,12 +141,12 @@ class DashboardAgent(BaseAgent):
             chart_count += 1
 
         # ── Scatter plot for top correlated pair ─────────────────────
-        if insight.correlation_matrix is not None and len(num_cols) >= 2:
+        if insight.correlation_matrix is not None and len(_safe_num_cols) >= 2:
             corr = insight.correlation_matrix
             max_corr = 0
-            pair = (num_cols[0], num_cols[1])
-            for i, c1 in enumerate(num_cols):
-                for c2 in num_cols[i + 1:]:
+            pair = (_safe_num_cols[0], _safe_num_cols[1])
+            for i, c1 in enumerate(_safe_num_cols):
+                for c2 in _safe_num_cols[i + 1:]:
                     if abs(corr.loc[c1, c2]) > max_corr:
                         max_corr = abs(corr.loc[c1, c2])
                         pair = (c1, c2)
@@ -147,9 +168,9 @@ class DashboardAgent(BaseAgent):
             chart_count += 1
 
         # ── Box plots ────────────────────────────────────────────────
-        if len(num_cols) >= 2:
+        if len(_safe_num_cols) >= 2:
             fig = go.Figure()
-            for col in num_cols[:8]:
+            for col in _safe_num_cols[:8]:
                 fig.add_trace(go.Box(y=df[col], name=col, marker_color=BRAND_COLOR))
             fig.update_layout(
                 title="Box Plots — Numeric Columns",
@@ -163,7 +184,8 @@ class DashboardAgent(BaseAgent):
 
         # ── Assemble full HTML ───────────────────────────────────────
         charts_html = "\n".join(
-            f'<section class="chart-card">{fig_html}</section>'
+            f'<section class="chart-card lazy-chart" '
+            f'style="min-height:400px">{fig_html}</section>'
             for fig_html in figures
         )
 
@@ -325,6 +347,28 @@ class DashboardAgent(BaseAgent):
         <h2>💡 Business Recommendations</h2>
         <ul>{recommendations_html}</ul>
     </section>
+    <style>
+        .lazy-chart {{ opacity: 0; transform: translateY(20px); 
+                       transition: opacity 0.4s ease, transform 0.4s ease; }}
+        .lazy-chart.visible {{ opacity: 1; transform: translateY(0); }}
+        @media (prefers-reduced-motion: reduce) {{
+            .lazy-chart {{ transition: none !important; 
+                           transform: none !important; }}
+        }}
+    </style>
+    <script>
+        const observer = new IntersectionObserver((entries) => {{
+            entries.forEach(entry => {{
+                if (entry.isIntersecting) {{
+                    entry.target.classList.add('visible');
+                    observer.unobserve(entry.target);
+                }}
+            }});
+        }}, {{ threshold: 0.1 }});
+        document.querySelectorAll('.lazy-chart').forEach(el => {{
+            observer.observe(el);
+        }});
+    </script>
 </body>
 </html>"""
 
