@@ -9,9 +9,10 @@ logger = logging.getLogger(__name__)
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 
 
-def is_redis_available(timeout: float = 1.0) -> bool:
+def is_redis_available(timeout: float = 2.0) -> bool:
     """
     Return True if Redis is reachable at REDIS_URL within *timeout* seconds.
+    Handles both redis:// (plain) and rediss:// (TLS, e.g. Upstash) schemes.
     Used to decide whether to dispatch via Celery or fall back to sync execution.
     """
     try:
@@ -21,10 +22,13 @@ def is_redis_available(timeout: float = 1.0) -> bool:
         host = parsed.hostname or "localhost"
         port = parsed.port or 6379
         db_num = int((parsed.path or "/0").lstrip("/") or 0)
+        use_ssl = parsed.scheme == "rediss"
         r = redis.Redis(
             host=host,
             port=port,
             db=db_num,
+            ssl=use_ssl,
+            ssl_cert_reqs=None if use_ssl else "required",
             socket_connect_timeout=timeout,
             socket_timeout=timeout,
         )

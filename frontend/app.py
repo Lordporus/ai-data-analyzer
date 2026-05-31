@@ -915,6 +915,10 @@ with tab_upload:
                 }
                 _last_stage = [""]  # mutable container so nested functions can mutate without nonlocal
 
+                # ── FIX: flag-based rerun prevents RerunException being caught ─
+                # Now we set a flag and call st.rerun() AFTER the try/except exits.
+                _pending_rerun = False
+
                 try:
                     if _use_celery:
                         # ── Celery path (Redis is running) ────────────────────────
@@ -929,7 +933,7 @@ with tab_upload:
                         else:
                             task = run_analysis_task.AsyncResult(st.session_state["celery_task_id"])
 
-                        # Poll task progress and update st.status live
+                        # Poll task progress — set flag instead of calling st.rerun()
                         task_state = task.state
                         if task_state == "PROGRESS" or task_state == "PENDING":
                             meta = task.info or {}
@@ -942,7 +946,7 @@ with tab_upload:
                                     st.write(label)
                                 progress_bar.progress(pct, text=f"⏳ {meta.get('stage', 'Processing...')}")
                             time.sleep(0.3)
-                            st.rerun()
+                            _pending_rerun = True  # signal; rerun happens AFTER try/except
                         elif task_state == "SUCCESS":
                             result_dict = task.result or {}
                             if result_dict.get("status") == "failed":
@@ -995,43 +999,44 @@ with tab_upload:
                         else:
                             raise Exception("Pipeline completed but results are missing from disk.")
 
-                    # ── Write final stages ────────────────────────────────────
-                    st.write("🔍 Detecting insights...")
-                    st.write("📈 Generating forecasts...")
-                    st.write("📄 Building PDF report...")
-                    progress_bar.progress(1.0, text="✅ Complete!")
+                    # ── Completion path (only runs when _pending_rerun is False) ─
+                    if not _pending_rerun:
+                        st.write("🔍 Detecting insights...")
+                        st.write("📈 Generating forecasts...")
+                        st.write("📄 Building PDF report...")
+                        progress_bar.progress(1.0, text="✅ Complete!")
 
-                    # ── Persist analysis run in workspace (both paths) ────────────
-                    run_id = result.job_id or str(_uuid.uuid4())
-                    storage_key = f"{run_id}_pipeline_result.pkl"
-                    try:
-                        from utils.storage import upload_to_r2
-                        from utils.workspace import add_analysis_run
-                        public_url = upload_to_r2(pickle_path, storage_key)
-                        active_org = st.session_state.get("active_org", {"id": "default"})
-                        user_info_ws = st.session_state.get("user", {"id": "anonymous"})
+                        # ── Persist analysis run in workspace ──────────────────────
+                        run_id = result.job_id or str(_uuid.uuid4())
+                        storage_key = f"{run_id}_pipeline_result.pkl"
                         dataset_name = uploaded_file.name if uploaded_file else temp_path.name
-                        if not st.session_state.get("demo_mode"):
-                            add_analysis_run(
-                                org_id=active_org["id"],
-                                user_id=user_info_ws["id"],
-                                dataset_name=dataset_name,
-                                status="completed",
-                                output_path=public_url,
-                            )
-                    except Exception as persist_err:
-                        print(f"Workspace persist error (non-fatal): {persist_err}")
-                        
-                    if "org_history" in st.session_state:
-                        del st.session_state["org_history"]
+                        try:
+                            from utils.storage import upload_to_r2
+                            from utils.workspace import add_analysis_run
+                            public_url = upload_to_r2(pickle_path, storage_key)
+                            active_org = st.session_state.get("active_org", {"id": "default"})
+                            user_info_ws = st.session_state.get("user", {"id": "anonymous"})
+                            if not st.session_state.get("demo_mode"):
+                                add_analysis_run(
+                                    org_id=active_org["id"],
+                                    user_id=user_info_ws["id"],
+                                    dataset_name=dataset_name,
+                                    status="completed",
+                                    output_path=public_url,
+                                )
+                        except Exception as persist_err:
+                            print(f"Workspace persist error (non-fatal): {persist_err}")
 
-                    # STORE RESULT IN SESSION STATE
-                    st.session_state["analysis_result"] = result
-                    st.session_state["analysis_dataset_name"] = dataset_name
-                    st.session_state["analysis_pickle_path"] = str(pickle_path)
-                    st.session_state["analysis_complete"] = True
-                    save_to_history(dataset_name, result)
-                    status.update(label="✅ Analysis Complete!", state="complete")
+                        if "org_history" in st.session_state:
+                            del st.session_state["org_history"]
+
+                        # STORE RESULT IN SESSION STATE
+                        st.session_state["analysis_result"] = result
+                        st.session_state["analysis_dataset_name"] = dataset_name
+                        st.session_state["analysis_pickle_path"] = str(pickle_path)
+                        st.session_state["analysis_complete"] = True
+                        save_to_history(dataset_name, result)
+                        status.update(label="✅ Analysis Complete!", state="complete")
 
                 except Exception as exc:
                     if "celery_task_id" in st.session_state:
@@ -1039,6 +1044,11 @@ with tab_upload:
                     st.error(f"❌ Analysis Failed: {exc}")
                     st.session_state["analysis_complete"] = False
                     status.update(label="❌ Analysis Failed", state="error")
+
+            # ── Rerun is now safely OUTSIDE the try/except ────────────────────
+            if _pending_rerun:
+                time.sleep(0.3)
+                st.rerun()
 
             time.sleep(0.5)
             if st.session_state.get("analysis_complete"):

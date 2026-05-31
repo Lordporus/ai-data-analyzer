@@ -50,6 +50,12 @@ async def upload_and_analyze(file: UploadFile = File(...)):
         raise HTTPException(500, f"Failed to save file: {exc}")
 
     # ── Queue pipeline task ──────────────────────────────────────────
+    if run_analysis_task is None:
+        raise HTTPException(
+            503,
+            "Task queue (Celery) is not available — Redis is unreachable or not configured. "
+            "Use the Streamlit frontend for in-process analysis."
+        )
     try:
         task = run_analysis_task.delay(str(upload_path), str(job_output_dir))
     except Exception as exc:

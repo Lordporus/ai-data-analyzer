@@ -21,6 +21,8 @@ API_HOST = os.getenv("API_HOST", "0.0.0.0")
 API_PORT = int(os.getenv("API_PORT", "8000"))
 STREAMLIT_PORT = int(os.getenv("STREAMLIT_PORT", "8501"))
 APP_BASE_URL = os.getenv("APP_BASE_URL", f"http://localhost:{API_PORT}")
+# Internal URL used for container-to-container calls inside Docker network
+API_INTERNAL_URL = os.getenv("API_INTERNAL_URL", APP_BASE_URL)
 
 # ── Limits ───────────────────────────────────────────────────────────────
 MAX_FILE_SIZE_MB = int(os.getenv("MAX_FILE_SIZE_MB", "50"))

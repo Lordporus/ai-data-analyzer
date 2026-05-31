@@ -107,3 +107,29 @@ def test_ai_strategy_integration(sample_data):
     assert isinstance(result.business_recommendations, list)
     # Verify primary_risk is set from LLM response
     assert result.primary_risk == "High operational volatility detected."
+
+def test_hybrid_sector_detection():
+    agent = InsightAgent()
+    # Stays deterministic
+    agent.intelligence_engine.mode = "deterministic"
+    
+    # 1. Test dataset name matches Tier 1 keywords (e.g. TSLA or reddit)
+    sector_reddit = agent.intelligence_engine.detect_sector_hybrid(["author", "body", "score"], "one-year-of-tsla-on-reddit-comments")
+    assert sector_reddit == "Social Media Analytics"
+    
+    sector_tsla = agent.intelligence_engine.detect_sector_hybrid(["close", "volume"], "one-year-of-tsla-stock-market-data")
+    assert sector_tsla == "Financial Markets"
+    
+    # 2. Test fallback to column name matches Tier 2
+    sector_cols = agent.intelligence_engine.detect_sector_hybrid(["revenue", "cost", "quantity"], "generic_data_file")
+    assert sector_cols == "Retail & Commerce"
+    
+    # 3. Test LLM fallback when confidence is low
+    agent.intelligence_engine.mode = "llm"
+    agent.intelligence_engine.llm = MagicMock()
+    agent.intelligence_engine.llm.generate_json = MagicMock(return_value={"sector": "Logistics Services"})
+    
+    # Generic name and generic columns will yield low confidence (0.60), escalates to LLM
+    sector_llm = agent.intelligence_engine.detect_sector_hybrid(["some_random_col"], "unknown_dataset")
+    assert sector_llm == "Logistics Services"
+    agent.intelligence_engine.llm.generate_json.assert_called_once()

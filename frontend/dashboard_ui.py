@@ -25,6 +25,21 @@ from config.settings import BRAND_COLOR, BRAND_NAME
 from orchestrator.master import PipelineResult
 from agents.data_quality import score_color
 
+
+def _safe_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Cast all object/mixed-type columns to str before passing to st.dataframe().
+    Prevents PyArrow Arrow serialization errors like:
+      'Could not convert X with type str to int64'
+    which occur when a column contains mixed Python types (e.g. int and str).
+    """
+    out = df.copy()
+    for col in out.columns:
+        if out[col].dtype == object:
+            out[col] = out[col].astype(str)
+    return out
+
+
 # ── Styling Constants ────────────────────────────────────────────────
 PLOT_BG = "#161b22"
 PAPER_BG = "#0d1117"
@@ -88,7 +103,7 @@ def render_interactive_dashboard(result: PipelineResult):
     
     # 5. Data Preview (Filtered)
     with st.expander(f"📋 View Filtered Data ({row_count} rows)", expanded=False):
-        st.dataframe(filtered_df, use_container_width=True)
+        st.dataframe(_safe_dataframe(filtered_df), use_container_width=True)
 
 
 def _render_filters(df: pd.DataFrame) -> pd.DataFrame:
@@ -524,7 +539,7 @@ def _render_drill_down(df: pd.DataFrame):
                 avg = subset[c].mean()
                 m_cols[i].metric(c, f"{_human_format(val)}", f"Avg: {_human_format(avg)}")
 
-        st.dataframe(subset.head(50), use_container_width=True)
+        st.dataframe(_safe_dataframe(subset.head(50)), use_container_width=True)
 
 
 

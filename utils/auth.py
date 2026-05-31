@@ -7,8 +7,10 @@ from pathlib import Path
 from typing import Optional, Dict
 from supabase import create_client, Client
 
-SUPABASE_URL = os.getenv("SUPABASE_URL", "")
+SUPABASE_URL      = os.getenv("SUPABASE_URL", "")
 SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY", "")
+SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY", "")
+
 IS_PRODUCTION = os.getenv("RENDER") == "true" or os.getenv("ENVIRONMENT") == "production"
 
 # Fallback local directory for JSON database
@@ -22,7 +24,8 @@ SESSION_STORE_PATH = _BASE_DIR / "auth" / "session_store.json"
 SESSION_EXPIRY_DAYS = 7
 
 
-def _get_supabase_client() -> Optional[Client]:
+def _get_auth_client() -> Optional[Client]:
+    """Anon-key client — used only for user sign-up / sign-in via Supabase Auth."""
     if SUPABASE_URL and SUPABASE_ANON_KEY:
         try:
             return create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
@@ -30,19 +33,42 @@ def _get_supabase_client() -> Optional[Client]:
             return None
     return None
 
+
+def _get_service_client() -> Optional[Client]:
+    """
+    Service-role client — bypasses RLS, used for all server-side database
+    operations (session_store, organizations, analysis_runs).
+    Falls back to anon client if service key is not set.
+    """
+    if SUPABASE_URL and SUPABASE_SERVICE_KEY:
+        try:
+            return create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+        except Exception:
+            return None
+    # Fallback: try anon key if service key not configured
+    return _get_auth_client()
+
+
+# Backward-compatible alias used by frontend/app.py for auth operations
+def _get_supabase_client() -> Optional[Client]:
+    return _get_service_client()
+
+
 def get_supabase_client() -> Optional[Client]:
-    return _get_supabase_client()
+    """Public auth client for session restore in the Streamlit frontend."""
+    return _get_auth_client()
 
 
 def _hash_password(password: str) -> str:
     return hashlib.sha256(password.encode()).hexdigest()
+
 
 def signup_user(email: str, password: str) -> Dict:
     """
     Signs up a new user using Supabase auth if credentials are set,
     otherwise falls back to local JSON database.
     """
-    client = _get_supabase_client()
+    client = _get_auth_client()
     if client:
         try:
             res = client.auth.sign_up({"email": email, "password": password})
@@ -58,8 +84,11 @@ def signup_user(email: str, password: str) -> Dict:
             raise Exception(f"Supabase Signup Error: {str(e)}")
         raise Exception("Signup failed.")
 
-    if IS_PRODUCTION or not SUPABASE_URL and IS_PRODUCTION:
-        raise Exception("Production auth requires Supabase credentials (SUPABASE_URL). Local JSON fallback is disabled in production.")
+    if IS_PRODUCTION:
+        raise Exception(
+            "Production auth requires Supabase credentials (SUPABASE_URL). "
+            "Local JSON fallback is disabled in production."
+        )
 
     # Fallback local system
     users = {}
@@ -84,7 +113,7 @@ def login_user(email: str, password: str) -> Dict:
     Logs in a user using Supabase auth if credentials are set,
     otherwise validates against local JSON database.
     """
-    client = _get_supabase_client()
+    client = _get_auth_client()
     if client:
         network_error = False
         try:
@@ -100,19 +129,25 @@ def login_user(email: str, password: str) -> Dict:
             raise Exception("Invalid email or password.")
         except Exception as e:
             err_msg = str(e).lower()
-            is_network_err = any(x in err_msg for x in ["getaddrinfo failed", "connectionerror", "connection refused", "timeout", "socket", "failed to establish a new connection"]) or "socket" in type(e).__name__.lower()
+            is_network_err = any(x in err_msg for x in [
+                "getaddrinfo failed", "connectionerror", "connection refused",
+                "timeout", "socket", "failed to establish a new connection"
+            ]) or "socket" in type(e).__name__.lower()
             if is_network_err:
                 network_error = True
             elif str(e) == "Invalid email or password.":
                 raise e
             else:
                 raise Exception(f"Supabase Login Error: {str(e)}")
-        
+
         if not network_error:
             raise Exception("Invalid email or password.")
 
-    if IS_PRODUCTION or not SUPABASE_URL and IS_PRODUCTION:
-        raise Exception("Production auth requires Supabase credentials (SUPABASE_URL). Local JSON fallback is disabled in production.")
+    if IS_PRODUCTION:
+        raise Exception(
+            "Production auth requires Supabase credentials (SUPABASE_URL). "
+            "Local JSON fallback is disabled in production."
+        )
 
     # Fallback local system
     if not USERS_FILE.exists():
@@ -133,7 +168,7 @@ def save_session_token(user: Dict) -> str:
     now = datetime.utcnow()
     expiry = (now + timedelta(days=SESSION_EXPIRY_DAYS)).isoformat()
 
-    client = _get_supabase_client()
+    client = _get_service_client()
     if client:
         try:
             client.table("session_store").insert({
@@ -146,7 +181,10 @@ def save_session_token(user: Dict) -> str:
         return token
 
     if IS_PRODUCTION:
-        raise Exception("Production auth requires Supabase credentials (SUPABASE_URL). Local file storage is disabled.")
+        raise Exception(
+            "Production auth requires Supabase credentials (SUPABASE_URL). "
+            "Local file storage is disabled."
+        )
 
     SESSION_STORE_PATH.parent.mkdir(parents=True, exist_ok=True)
     store: Dict = {}
@@ -166,8 +204,8 @@ def save_session_token(user: Dict) -> str:
 def load_session_token(token: str) -> Optional[Dict]:
     if not token:
         return None
-        
-    client = _get_supabase_client()
+
+    client = _get_service_client()
     if client:
         try:
             res = client.table("session_store").select("*").eq("token", token).execute()
@@ -199,12 +237,12 @@ def load_session_token(token: str) -> Optional[Dict]:
 def delete_session_token(token: str) -> None:
     if not token:
         return
-        
-    client = _get_supabase_client()
+
+    client = _get_service_client()
     if client:
         try:
             client.table("session_store").delete().eq("token", token).execute()
-        except Exception as e:
+        except Exception:
             pass
         return
 

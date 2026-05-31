@@ -9,6 +9,11 @@ def get_job_status(job_id: str):
     """
     Get the real-time execution status of an analysis job in the task queue.
     """
+    if run_analysis_task is None:
+        raise HTTPException(
+            503,
+            "Task queue (Celery) is not available — Redis is unreachable or not configured."
+        )
     task = run_analysis_task.AsyncResult(job_id)
     
     response = {
