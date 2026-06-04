@@ -5,24 +5,77 @@ and returns structured results with download links.
 
 from __future__ import annotations
 
-import asyncio
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, Cookie, File, Header, HTTPException, UploadFile
 
 from config.settings import MAX_FILE_SIZE_BYTES, OUTPUT_DIR, UPLOAD_DIR
+from utils.auth import load_session_token
+from utils.monetization import FREE_FILE_SIZE_BYTES, can_run_analysis, is_pro_org
 from utils.task_queue import run_analysis_task
+from utils.workspace import get_organizations
 
 router = APIRouter()
 
 
+def _resolve_user_org(user_id: str) -> dict | None:
+    """Resolve an authenticated user's organization from their analysis history.
+
+    Returns the first organization the user has recorded runs for, falling
+    back to None (which means free-tier limits apply).
+    """
+    from utils.workspace import get_org_analysis_history
+    orgs = get_organizations()
+    if not orgs:
+        return None
+    # Check each org for runs belonging to this user
+    for org in orgs:
+        history = get_org_analysis_history(org.get("id", ""))
+        for run in history:
+            if run.get("user_id") == user_id:
+                return org
+    # No matching org found — return the first org (default workspace)
+    # but do NOT trust its plan; caller will treat as free.
+    return None
+
+
 @router.post("/upload")
-async def upload_and_analyze(file: UploadFile = File(...)):
+async def upload_and_analyze(
+    file: UploadFile = File(...),
+    session_token: str | None = Cookie(default=None),
+    x_org_id: str = Header(default="default"),
+):
     """Upload a CSV file and queue the analysis pipeline.
 
     Returns a JSON object with job_id and status.
     """
+    # ── Authenticate & Resolve Plan Server-Side ──────────────────────
+    # The organization used for monetization decisions MUST come from
+    # authenticated server-side identity only. The client-provided
+    # x_org_id header is NOT used for plan/limit decisions.
+    user = None
+    org = None
+
+    if session_token:
+        user = load_session_token(session_token)
+
+    if user:
+        org = _resolve_user_org(user.get("id", ""))
+
+    # Plan determination: only trust server-resolved org
+    is_pro = is_pro_org(org) if org else False
+    effective_limit = MAX_FILE_SIZE_BYTES if is_pro else min(MAX_FILE_SIZE_BYTES, FREE_FILE_SIZE_BYTES)
+
+    # ── Quota enforcement (authenticated free-tier users only) ───────
+    # Anonymous users are not quota-checked: can_run_analysis(None)
+    # counts against org_id="default", which would incorrectly deny
+    # all anonymous traffic once any org hits the limit.
+    if user and not is_pro:
+        allowed, quota_msg, _, _ = can_run_analysis(org)
+        if not allowed:
+            raise HTTPException(429, quota_msg)
+
     # ── Validate ─────────────────────────────────────────────────────
     filename_lower = file.filename.lower() if file.filename else ""
     if not file.filename or not (filename_lower.endswith(".csv") or filename_lower.endswith(".xlsx") or filename_lower.endswith(".xls")):
@@ -37,11 +90,11 @@ async def upload_and_analyze(file: UploadFile = File(...)):
 
     try:
         content = await file.read()
-        if len(content) > MAX_FILE_SIZE_BYTES:
+        if len(content) > effective_limit:
             raise HTTPException(
                 413,
                 f"File too large. Maximum size is "
-                f"{MAX_FILE_SIZE_BYTES // (1024 * 1024)} MB.",
+                f"{effective_limit // (1024 * 1024)} MB for this plan.",
             )
         upload_path.write_bytes(content)
     except HTTPException:

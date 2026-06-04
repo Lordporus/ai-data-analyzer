@@ -130,7 +130,7 @@ def render_shared_report_html(record: dict, result: Any) -> str:
     ]:
         url = _output_url(getattr(result, path_attr, ""))
         if url:
-            downloads.append(f"<a class='button' href='{html.escape(url)}' type='{mime}'>{html.escape(label)}</a>")
+            downloads.append(f"<a class='button' href='{html.escape(url)}?share_token={token}' type='{mime}'>{html.escape(label)}</a>")
 
     return f"""<!doctype html>
 <html lang="en">
@@ -184,12 +184,12 @@ def render_shared_report_html(record: dict, result: Any) -> str:
 def _output_url(path_value: str) -> str:
     if not path_value:
         return ""
-    if path_value.startswith("http://") or path_value.startswith("https://") or path_value.startswith("/outputs/"):
+    if path_value.startswith("http://") or path_value.startswith("https://") or path_value.startswith("/api/download/"):
         return path_value
     path = Path(path_value)
     try:
         rel = path.resolve().relative_to(OUTPUT_DIR.resolve())
-        return f"/outputs/{rel.as_posix()}"
+        return f"/api/download/{rel.as_posix()}"
     except Exception:
         return ""
 

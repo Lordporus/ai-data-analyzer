@@ -67,18 +67,39 @@ def signup_user(email: str, password: str) -> Dict:
     """
     Signs up a new user using Supabase auth if credentials are set,
     otherwise falls back to local JSON database.
+
+    IMPORTANT: When Supabase "Confirm email" is enabled, this intentionally
+    does NOT return session tokens. The caller must show a verification
+    prompt instead of logging the user in immediately.
+    The returned dict includes ``pending_verification=True`` so the caller
+    can branch correctly.
     """
     client = _get_auth_client()
     if client:
         try:
             res = client.auth.sign_up({"email": email, "password": password})
             if res.user:
+                # Detect whether Supabase requires email confirmation.
+                # When confirmation is required, res.session is None and
+                # email_confirmed_at is None on the freshly created user.
+                needs_verification = (
+                    res.session is None
+                    or res.user.email_confirmed_at is None
+                )
                 return {
                     "id": res.user.id,
                     "email": res.user.email,
                     "type": "supabase",
-                    "access_token": res.session.access_token if res.session else None,
-                    "refresh_token": res.session.refresh_token if res.session else None
+                    # Do NOT expose tokens when verification is pending —
+                    # the user must confirm their email before a session
+                    # should be created.
+                    "access_token": None if needs_verification else (
+                        res.session.access_token if res.session else None
+                    ),
+                    "refresh_token": None if needs_verification else (
+                        res.session.refresh_token if res.session else None
+                    ),
+                    "pending_verification": needs_verification,
                 }
         except Exception as e:
             raise Exception(f"Supabase Signup Error: {str(e)}")
@@ -112,6 +133,10 @@ def login_user(email: str, password: str) -> Dict:
     """
     Logs in a user using Supabase auth if credentials are set,
     otherwise validates against local JSON database.
+
+    Raises an explicit error when the user's email has not been confirmed
+    (``email_confirmed_at`` is None) so that the frontend can surface a
+    clear verification prompt instead of granting access.
     """
     client = _get_auth_client()
     if client:
@@ -119,12 +144,21 @@ def login_user(email: str, password: str) -> Dict:
         try:
             res = client.auth.sign_in_with_password({"email": email, "password": password})
             if res.user:
+                # Guard: enforce email verification before granting a session.
+                # Supabase populates email_confirmed_at only after the user
+                # clicks the confirmation link in their inbox.
+                if res.user.email_confirmed_at is None:
+                    raise Exception(
+                        "Please verify your email first. "
+                        "Check your inbox for a confirmation link from us."
+                    )
                 return {
                     "id": res.user.id,
                     "email": res.user.email,
                     "type": "supabase",
                     "access_token": res.session.access_token if res.session else None,
-                    "refresh_token": res.session.refresh_token if res.session else None
+                    "refresh_token": res.session.refresh_token if res.session else None,
+                    "pending_verification": False,
                 }
             raise Exception("Invalid email or password.")
         except Exception as e:

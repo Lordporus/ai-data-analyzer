@@ -24,20 +24,96 @@ if str(_PROJECT_ROOT) not in sys.path:
 from config.settings import BRAND_COLOR, BRAND_NAME
 from orchestrator.master import PipelineResult
 from agents.data_quality import score_color
+from utils.monetization import FREE_NL_QUERY_DAILY_LIMIT, is_pro_org
 
 
 def _safe_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Cast all object/mixed-type columns to str before passing to st.dataframe().
-    Prevents PyArrow Arrow serialization errors like:
-      'Could not convert X with type str to int64'
-    which occur when a column contains mixed Python types (e.g. int and str).
+    Make a DataFrame fully Arrow-serializable before passing to st.dataframe().
+
+    Handles all known PyArrow conversion failure cases:
+      1. Columns with dtype=object that contain mixed Python types.
+      2. Nominally numeric columns (int64/float64) that secretly hold Python
+         str values (e.g. "One", "Two") — detected via per-element inspection.
+      3. Columns containing non-primitive types: Decimal, bytes, complex, etc.
+      4. Datetime columns with mixed timezone awareness.
+      5. Nullable integer/boolean extension types (pd.NA vs None mismatch).
+
+    Strategy: attempt a column-level Arrow cast; on failure fall back to str.
+    This preserves proper numeric/date types wherever possible and only
+    stringifies columns that truly cannot be serialized.
     """
+    import pyarrow as pa  # local import — only needed here
+
     out = df.copy()
+
     for col in out.columns:
-        if out[col].dtype == object:
-            out[col] = out[col].astype(str)
+        series = out[col]
+
+        # ── Fast path: already a clean numeric or datetime type ──────────
+        # These rarely cause issues; skip expensive per-element checks.
+        if pd.api.types.is_float_dtype(series) or pd.api.types.is_integer_dtype(series):
+            # Still verify: a column pandas calls int64 can hold Python str
+            # if the DataFrame was constructed from mixed Python objects.
+            if series.dtype == object or _has_non_native_values(series):
+                out[col] = series.astype(str)
+            continue
+
+        # ── Extension types (Int8, Int16, …, boolean, string) ───────────
+        if hasattr(series, "dtype") and isinstance(
+            series.dtype, pd.api.types.pandas_dtype("Int64").__class__
+        ):
+            # Nullable integer — safe for Arrow; leave as-is.
+            continue
+
+        # ── Object / mixed-type columns ──────────────────────────────────
+        if series.dtype == object or series.dtype.name == "object":
+            # Try a numeric coercion first to recover clean int/float columns
+            # that were read as object (e.g. CSV mixed with header row).
+            numeric_attempt = pd.to_numeric(series, errors="coerce")
+            non_null_original = series.dropna()
+            non_null_numeric = numeric_attempt.dropna()
+
+            if len(non_null_original) > 0 and len(non_null_numeric) == len(non_null_original):
+                # Every non-null value converted successfully → use numeric.
+                out[col] = numeric_attempt
+            else:
+                # Genuine mixed / string column → stringify everything safely.
+                out[col] = series.apply(
+                    lambda v: str(v) if not (isinstance(v, float) and pd.isna(v)) else None
+                ).astype(str)
+            continue
+
+        # ── Datetime with mixed tz-awareness ────────────────────────────
+        if pd.api.types.is_datetime64_any_dtype(series):
+            try:
+                # Arrow requires uniform tz; strip tz to make it uniform.
+                if hasattr(series.dt, "tz") and series.dt.tz is not None:
+                    out[col] = series.dt.tz_convert("UTC")
+            except Exception:
+                out[col] = series.astype(str)
+            continue
+
+        # ── Final safety net: attempt Arrow cast, fall back to str ───────
+        try:
+            pa.Array.from_pandas(series)
+        except (pa.ArrowInvalid, pa.ArrowNotImplementedError, TypeError, ValueError):
+            out[col] = series.astype(str)
+
     return out
+
+
+def _has_non_native_values(series: "pd.Series") -> bool:
+    """
+    Return True if any element in a nominally numeric series is actually
+    a Python str (or other non-numeric scalar) — the silent cause of Arrow
+    conversion errors when Pandas inferred dtype incorrectly.
+    """
+    if series.dtype == object:
+        return True
+    # Sample up to 500 rows for performance on large frames.
+    sample = series.dropna().head(500)
+    return any(isinstance(v, str) for v in sample)
 
 
 # ── Styling Constants ────────────────────────────────────────────────
@@ -45,6 +121,14 @@ PLOT_BG = "#161b22"
 PAPER_BG = "#0d1117"
 TEXT_COLOR = "#e6edf3"
 GRID_COLOR = "#30363d"
+
+
+def _active_org() -> dict:
+    return st.session_state.get("active_org", {"id": "default", "plan": "free"})
+
+
+def _is_pro() -> bool:
+    return is_pro_org(_active_org())
 
 
 def render_interactive_dashboard(result: PipelineResult):
@@ -67,6 +151,45 @@ def render_interactive_dashboard(result: PipelineResult):
         st.warning("No records match the selected filters.")
         return
 
+    # ── KPI Metrics Row ──────────────────────────────
+    _df = st.session_state.get("last_df", None)
+    if _df is not None:
+        st.markdown("### 📊 Key Metrics")
+        _col1, _col2, _col3, _col4 = st.columns(4)
+
+        _col1.metric(
+            label="📁 Total Records",
+            value=f"{len(_df):,}"
+        )
+
+        _num_cols = len(_df.select_dtypes(include='number').columns)
+        _col2.metric(
+            label="🔢 Numeric Columns",
+            value=_num_cols
+        )
+
+        _missing_pct = round(
+            (_df.isnull().sum().sum() /
+            (_df.shape[0] * _df.shape[1])) * 100, 1
+        )
+        _col3.metric(
+            label="⚠️ Missing Data",
+            value=f"{_missing_pct}%",
+            delta=f"-{_missing_pct}% to fix"
+                  if _missing_pct > 0 else "Clean ✅",
+            delta_color="inverse"
+        )
+
+        _quality = max(0, round(100 - (_missing_pct * 2), 1))
+        _col4.metric(
+            label="✅ Quality Score",
+            value=f"{_quality}%",
+            delta="Good" if _quality >= 80 else "Needs attention",
+            delta_color="normal" if _quality >= 80 else "inverse"
+        )
+        st.divider()
+    # ── End KPI Metrics Row ──────────────────────────
+
     st.markdown("---")
     
     # 2. Strategic Analysis (AI)
@@ -85,7 +208,13 @@ def render_interactive_dashboard(result: PipelineResult):
     forecast_result = getattr(result, "forecast", None)
     if forecast_result and forecast_result.is_time_series:
         st.markdown("### 🔮 Forecast & Scenario Lab")
-        _render_forecast_lab(forecast_result, filtered_df)
+        if _is_pro():
+            _render_forecast_lab(forecast_result, filtered_df)
+        else:
+            _render_locked_feature(
+                "Advanced Forecasting is available on the Pro plan.",
+                "Upgrade in the sidebar to unlock forecast charts, scenario sliders, and VAR mode.",
+            )
         st.markdown("---")
     
     # 5. Ask Your Data (New Phase 15)
@@ -155,6 +284,18 @@ def _render_filters(df: pd.DataFrame) -> pd.DataFrame:
                 ]
 
     return filtered_df
+
+
+def _render_locked_feature(title: str, body: str) -> None:
+    st.markdown(
+        f"""
+        <div style="border:1px solid {GRID_COLOR}; background:{PLOT_BG}; border-radius:8px; padding:18px 20px;">
+            <strong>🔒 {title}</strong><br>
+            <span style="color:{TEXT_COLOR}; opacity:.78;">{body}</span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 def _render_kpis(curr_df: pd.DataFrame, orig_df: pd.DataFrame):
@@ -374,6 +515,14 @@ def _render_smart_charts(df: pd.DataFrame):
             elif is_x_num: final_type = "Scatter"
 
         cat_limit = None if show_all_cats else 25
+        
+        if cat_limit is None or cat_limit > 50:
+            cat_limit = 50
+            st.caption(
+                "⚠️ Showing top 50 categories only "
+                "(full data available in filtered table below)"
+            )
+
         fig = go.Figure()
 
         if final_type == "Bar":
@@ -873,8 +1022,14 @@ def _render_nl_query_section(df: pd.DataFrame):
         st.session_state["nl_query_result"] = None
     if "nl_query_last_query" not in st.session_state:
         st.session_state["nl_query_last_query"] = ""
+    if "nl_query_free_count" not in st.session_state:
+        st.session_state["nl_query_free_count"] = 0
 
     with st.expander("💬 Ask a question about this data", expanded=True):
+        if not _is_pro():
+            remaining = max(FREE_NL_QUERY_DAILY_LIMIT - st.session_state["nl_query_free_count"], 0)
+            st.caption(f"Free plan: {remaining}/{FREE_NL_QUERY_DAILY_LIMIT} questions remaining today in this session.")
+
         col1, col2 = st.columns([4, 1])
         with col1:
             query = st.text_input(
@@ -893,10 +1048,15 @@ def _render_nl_query_section(df: pd.DataFrame):
 
         # Run the agent and store result in session_state
         if analyze_btn and query:
+            if not _is_pro() and st.session_state["nl_query_free_count"] >= FREE_NL_QUERY_DAILY_LIMIT:
+                st.error("Free users are limited to 3 questions per day. Upgrade to Pro for unlimited questions.")
+                return
             with st.spinner("Analyzing your question..."):
                 try:
                     agent = NLQueryAgent()
                     nl_result = agent.run({"query": query, "df": df})
+                    if not _is_pro():
+                        st.session_state["nl_query_free_count"] += 1
                     st.session_state["nl_query_result"] = {
                         "error": nl_result.error,
                         "explanation": nl_result.explanation,
@@ -995,4 +1155,3 @@ def _render_dynamic_chart(df: pd.DataFrame, config: Dict[str, Any]):
     )
     
     st.plotly_chart(fig, use_container_width=True)
-

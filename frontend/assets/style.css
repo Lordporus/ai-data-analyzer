@@ -1,0 +1,206 @@
+/* ── Typography ─────────────────────────── */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+html, body, [class*="css"] {
+    font-family: 'Inter', sans-serif !important;
+}
+
+/* ── Hide Streamlit default branding ────── */
+#MainMenu {visibility: hidden;}
+footer {visibility: hidden;}
+header {visibility: hidden;}
+
+/* ── Main container padding ─────────────── */
+.block-container {
+    padding-top: 1.5rem !important;
+    padding-left: 2rem !important;
+    padding-right: 2rem !important;
+    max-width: 1200px !important;
+}
+
+/* ── Metric cards ────────────────────────── */
+[data-testid="metric-container"] {
+    background: linear-gradient(135deg, #1e1b3a 0%, #16213e 100%);
+    border: 1px solid #534AB7;
+    border-radius: 12px;
+    padding: 1rem 1.2rem !important;
+    box-shadow: 0 4px 15px rgba(83, 74, 183, 0.15);
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+[data-testid="metric-container"]:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(83, 74, 183, 0.3);
+}
+
+[data-testid="metric-container"] label {
+    color: #a89fe8 !important;
+    font-size: 0.78rem !important;
+    font-weight: 500 !important;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+[data-testid="metric-container"] [data-testid="stMetricValue"] {
+    color: #ffffff !important;
+    font-size: 1.8rem !important;
+    font-weight: 700 !important;
+}
+
+/* ── Primary buttons ─────────────────────── */
+.stButton > button[kind="primary"] {
+    background: linear-gradient(135deg, #534AB7 0%, #6c63d5 100%) !important;
+    color: white !important;
+    border: none !important;
+    border-radius: 8px !important;
+    padding: 0.5rem 1.5rem !important;
+    font-weight: 600 !important;
+    font-size: 0.9rem !important;
+    letter-spacing: 0.02em;
+    transition: all 0.2s ease !important;
+    box-shadow: 0 4px 12px rgba(83, 74, 183, 0.4) !important;
+}
+
+.stButton > button[kind="primary"]:hover {
+    transform: translateY(-1px) !important;
+    box-shadow: 0 6px 16px rgba(83, 74, 183, 0.6) !important;
+}
+
+/* ── Secondary buttons ───────────────────── */
+.stButton > button[kind="secondary"] {
+    background: transparent !important;
+    color: #a89fe8 !important;
+    border: 1px solid #534AB7 !important;
+    border-radius: 8px !important;
+    font-weight: 500 !important;
+    transition: all 0.2s ease !important;
+}
+
+.stButton > button[kind="secondary"]:hover {
+    background: rgba(83, 74, 183, 0.15) !important;
+    color: #ffffff !important;
+}
+
+/* ── Tabs styling ────────────────────────── */
+.stTabs [data-baseweb="tab-list"] {
+    background: transparent !important;
+    gap: 0.5rem;
+    border-bottom: 1px solid #2d2d4e !important;
+}
+
+.stTabs [data-baseweb="tab"] {
+    background: transparent !important;
+    color: #8888aa !important;
+    border-radius: 8px 8px 0 0 !important;
+    font-weight: 500 !important;
+    font-size: 0.9rem !important;
+    padding: 0.5rem 1.2rem !important;
+    border: none !important;
+    transition: all 0.2s ease;
+}
+
+.stTabs [aria-selected="true"] {
+    background: rgba(83, 74, 183, 0.15) !important;
+    color: #a89fe8 !important;
+    border-bottom: 2px solid #534AB7 !important;
+}
+
+/* ── Sidebar styling ─────────────────────── */
+[data-testid="stSidebar"] {
+    background: #0d0d1a !important;
+    border-right: 1px solid #1e1b3a !important;
+}
+
+[data-testid="stSidebar"] .stProgress > div > div {
+    background: linear-gradient(90deg, #534AB7, #6c63d5) !important;
+    border-radius: 4px !important;
+}
+
+/* ── File uploader ───────────────────────── */
+[data-testid="stFileUploader"] {
+    background: #1a1a2e !important;
+    border: 2px dashed #534AB7 !important;
+    border-radius: 12px !important;
+    padding: 1rem !important;
+    transition: border-color 0.2s ease;
+}
+
+[data-testid="stFileUploader"]:hover {
+    border-color: #6c63d5 !important;
+    background: rgba(83, 74, 183, 0.05) !important;
+}
+
+/* ── Expander / containers ───────────────── */
+[data-testid="stExpander"] {
+    background: #12121f !important;
+    border: 1px solid #1e1b3a !important;
+    border-radius: 10px !important;
+}
+
+/* ── Divider ─────────────────────────────── */
+hr {
+    border-color: #1e1b3a !important;
+    margin: 1rem 0 !important;
+}
+
+/* ── Input fields ────────────────────────── */
+.stTextInput > div > div > input,
+.stTextArea > div > div > textarea {
+    background: #12121f !important;
+    border: 1px solid #2d2d4e !important;
+    border-radius: 8px !important;
+    color: #ffffff !important;
+    font-family: 'Inter', sans-serif !important;
+}
+
+.stTextInput > div > div > input:focus,
+.stTextArea > div > div > textarea:focus {
+    border-color: #534AB7 !important;
+    box-shadow: 0 0 0 2px rgba(83, 74, 183, 0.2) !important;
+}
+
+/* ── Selectbox ───────────────────────────── */
+.stSelectbox > div > div {
+    background: #12121f !important;
+    border: 1px solid #2d2d4e !important;
+    border-radius: 8px !important;
+    color: #ffffff !important;
+}
+
+/* ── Success / Info / Warning boxes ──────── */
+.stSuccess {
+    background: rgba(0, 200, 100, 0.1) !important;
+    border-left: 3px solid #00c864 !important;
+    border-radius: 8px !important;
+}
+
+.stInfo {
+    background: rgba(83, 74, 183, 0.1) !important;
+    border-left: 3px solid #534AB7 !important;
+    border-radius: 8px !important;
+}
+
+.stWarning {
+    background: rgba(255, 170, 0, 0.1) !important;
+    border-left: 3px solid #ffaa00 !important;
+    border-radius: 8px !important;
+}
+
+/* ── Scrollbar ───────────────────────────── */
+::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+}
+
+::-webkit-scrollbar-track {
+    background: #0d0d1a;
+}
+
+::-webkit-scrollbar-thumb {
+    background: #534AB7;
+    border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: #6c63d5;
+}

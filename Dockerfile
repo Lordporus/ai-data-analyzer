@@ -15,8 +15,11 @@ COPY . .
 # Ensure start.sh is executable
 RUN chmod +x start.sh
 
-# Create runtime directories
-RUN mkdir -p uploads outputs
+# Create runtime directories and switch to non-root user for security
+RUN mkdir -p uploads outputs && \
+    useradd -m -u 1000 appuser && \
+    chown -R appuser:appuser /app
+USER appuser
 
 # Expose ports
 EXPOSE 8000 8501

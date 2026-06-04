@@ -39,7 +39,7 @@ def get_job_status(job_id: str):
             
             output_dir_str = result.get("output_dir", "")
             output_id = Path(output_dir_str).name
-            base = f"/outputs/{output_id}"
+            base = f"/api/download/{output_id}"
             
             response["info"] = {
                 "status": status,

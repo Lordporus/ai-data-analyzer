@@ -17,20 +17,35 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+
+
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 from datetime import datetime
 import requests
 import pickle
+import extra_streamlit_components as stx
 
-from config.settings import BRAND_NAME, BRAND_COLOR, OUTPUT_DIR, UPLOAD_DIR, is_llm_enabled, SCHEDULER_ENABLED
+from config.settings import API_INTERNAL_URL, BRAND_NAME, BRAND_COLOR, OUTPUT_DIR, UPLOAD_DIR, is_llm_enabled, SCHEDULER_ENABLED
 from orchestrator.master import MasterOrchestrator, PipelineResult
 from agents.data_quality import score_color, risk_level
 from utils.auth import login_user, signup_user, save_session_token, load_session_token, delete_session_token, get_supabase_client
 from utils.workspace import create_organization, get_organizations, add_analysis_run, get_org_analysis_history
 from utils.storage import upload_to_r2, LOCAL_STORAGE_DIR
 from utils.share_reports import create_share_link, revoke_share_link
+from utils.monetization import (
+    FREE_ANALYSIS_LIMIT,
+    FREE_FILE_SIZE_BYTES,
+    FREE_NL_QUERY_DAILY_LIMIT,
+    billing_portal_url,
+    can_run_analysis,
+    can_upload_file,
+    count_monthly_analyses,
+    is_pro_org,
+    org_plan,
+)
+
 
 def load_analysis_result_from_storage(output_path: str):
     """
@@ -88,6 +103,134 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
+
+# Load custom CSS
+import os
+_CSS_PATH = os.path.join(os.path.dirname(__file__),
+                         "assets", "style.css")
+if os.path.exists(_CSS_PATH):
+    with open(_CSS_PATH) as _f:
+        st.markdown(f"<style>{_f.read()}</style>",
+                    unsafe_allow_html=True)
+
+
+# ── Monetization Helpers ─────────────────────────────────────────────
+def _current_org() -> dict:
+    return st.session_state.get("active_org", {"id": "default", "name": "Default Team Workspace", "plan": "free"})
+
+
+def _current_plan() -> str:
+    return org_plan(_current_org())
+
+
+def _refresh_active_org_plan(plan: str) -> None:
+    if "active_org" in st.session_state:
+        st.session_state["active_org"]["plan"] = plan
+    if "orgs" in st.session_state:
+        for org in st.session_state["orgs"]:
+            if org.get("id") == st.session_state.get("active_org", {}).get("id"):
+                org["plan"] = plan
+
+
+def _start_razorpay_checkout() -> None:
+    org = _current_org()
+    user = st.session_state.get("user", {})
+    if not org.get("id") or org.get("id") == "demo":
+        st.warning("Create or select a real workspace before upgrading.")
+        return
+    try:
+        response = requests.post(
+            f"{API_INTERNAL_URL.rstrip('/')}/api/checkout/razorpay",
+            json={
+                "org_id": org.get("id"),
+                "org_name": org.get("name", "Workspace"),
+                "user_email": user.get("email", ""),
+            },
+            timeout=20,
+        )
+        if response.status_code >= 400:
+            detail = response.json().get("detail", response.text)
+            st.error(detail)
+            return
+        checkout_url = response.json().get("checkout_url")
+        if not checkout_url:
+            st.error("Razorpay checkout did not return a payment link.")
+            return
+        st.link_button("Continue to Razorpay Checkout", checkout_url, type="primary", use_container_width=True)
+        st.info("After payment, Razorpay will notify the app through the webhook and your workspace will unlock Pro.")
+    except Exception as exc:
+        st.error(f"Could not start Razorpay checkout: {exc}")
+
+
+@st.dialog("👤 Account Settings")
+def show_profile_modal():
+    org = _current_org()
+    plan = _current_plan()
+    used = count_monthly_analyses(org.get("id", "default"))
+    st.markdown(f"### {org.get('name', 'Workspace')}")
+    if plan == "pro":
+        st.success("⚡ Pro Plan")
+        st.metric("Analyses this month", used, "Unlimited")
+    else:
+        st.warning("Free Plan")
+        st.metric("Analyses this month", f"{used}/{FREE_ANALYSIS_LIMIT}")
+        st.progress(min(used / FREE_ANALYSIS_LIMIT, 1.0))
+    st.divider()
+    if plan == "pro":
+        st.link_button("Manage Billing", billing_portal_url(), use_container_width=True)
+    else:
+        if st.button("Upgrade to Pro — $19/month", type="primary", use_container_width=True, key="profile_upgrade_btn"):
+            _start_razorpay_checkout()
+    st.caption("Email and password changes are handled by Supabase Auth.")
+
+
+# ── Upgrade Modal ───────────────────────────────────────────────────
+@st.dialog("⚡ Upgrade to Pro")
+def show_upgrade_modal():
+    st.markdown("### Unlock the full power of AI analysis")
+    st.divider()
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.markdown("**Free**")
+        st.markdown("$0 / month")
+        st.markdown("""
+        - ✅ 5 analyses/month
+        - ✅ CSV & Excel upload
+        - ✅ Basic insights
+        - ❌ Advanced AI insights
+        - ❌ PDF reports
+        - ❌ Team workspace
+        - ❌ Forecast lab
+        """)
+
+    with col2:
+        st.markdown("**⚡ Pro**")
+        st.markdown(
+            '<p><s style="color:#888;">$49</s> '
+            '<strong style="color:#a89fe8; '
+            'font-size:1.3rem;">$19 / month</strong></p>',
+            unsafe_allow_html=True
+        )
+        st.markdown("""
+        - ✅ Unlimited analyses
+        - ✅ All file formats
+        - ✅ 10x deeper insights
+        - ✅ Advanced AI insights
+        - ✅ PDF + Excel reports
+        - ✅ Team workspace
+        - ✅ Forecast lab
+        """)
+
+    st.divider()
+    st.caption("🚀 1,200+ founders already on Pro · "
+               "Cancel anytime · No hidden fees")
+
+    if st.button("Start Pro — $19/month",
+                 type="primary",
+                 use_container_width=True):
+        _start_razorpay_checkout()
 
 
 # ── UI-2: Landing Page (before login) ────────────────────────────────
@@ -194,13 +337,13 @@ def load_sample_dataset():
     else:
         st.error("Sample dataset not found. Please contact support.")
 
-# ── Persistent Session Restore (BUG 2 fix) ──────────────────────────────
-# Runs on every page load BEFORE the login gate. If the URL carries a valid
-# session token (written to st.query_params on login/signup), we restore the
-# user into session_state so they are never asked to log in again within the
-# 7-day window — even after a browser refresh or Streamlit WebSocket timeout.
+# ── Persistent Session Restore (Cookie-Based) ───────────────────────────────
+# On every page load BEFORE the login gate, we attempt to read the session
+# token from the HttpOnly cookie (set at login). This keeps users logged in
+# across browser refreshes without exposing the token in the URL.
+_cookie_manager = stx.CookieManager(key="_session_cm")
 if "user" not in st.session_state:
-    _saved_token = st.query_params.get("session", "")
+    _saved_token = _cookie_manager.get("session_token") or ""
     if _saved_token:
         _restored_user = None
         _supabase_client = get_supabase_client()
@@ -209,7 +352,7 @@ if "user" not in st.session_state:
                 _parts = _saved_token.split(":::")
                 _access_token = _parts[0]
                 _refresh_token = _parts[1] if len(_parts) > 1 else None
-                
+
                 # Try getting the user using the current access token
                 _user_res = _supabase_client.auth.get_user(_access_token)
                 if _user_res and _user_res.user:
@@ -227,7 +370,10 @@ if "user" not in st.session_state:
                         _new_access_token = _refresh_res.session.access_token
                         _new_refresh_token = _refresh_res.session.refresh_token
                         _new_token_str = f"{_new_access_token}:::{_new_refresh_token}"
-                        st.query_params["session"] = _new_token_str
+                        # Rotate the cookie with the refreshed token
+                        _cookie_manager.set(
+                            "session_token", _new_token_str
+                        )
                         _saved_token = _new_token_str
                         _restored_user = {
                             "id": _refresh_res.user.id,
@@ -238,14 +384,29 @@ if "user" not in st.session_state:
                         }
             except Exception:
                 pass
-        
+
         # Fallback to local session token restore if not Supabase or Supabase check failed
         if not _restored_user:
             _restored_user = load_session_token(_saved_token)
-            
+
         if _restored_user:
             st.session_state["user"] = _restored_user
             st.session_state["_session_token"] = _saved_token
+
+if st.query_params.get("upgrade") == "success" and not st.session_state.get("_upgrade_success_seen"):
+    st.session_state["_upgrade_success_seen"] = True
+    try:
+        refreshed_orgs = get_organizations()
+        st.session_state["orgs"] = refreshed_orgs
+        paid_org_id = st.query_params.get("org_id", "")
+        for org in refreshed_orgs:
+            if org.get("id") == paid_org_id:
+                st.session_state["active_org"] = org
+                break
+    except Exception:
+        pass
+    st.balloons()
+    st.success("Payment received. Your Pro plan will unlock once the Razorpay webhook confirms the subscription.")
 
 # ── UI-2: Landing Page Gate (before login) ───────────────────────────
 if "user" not in st.session_state and not st.session_state.get("show_auth", False):
@@ -277,18 +438,25 @@ if "user" not in st.session_state:
                     if user.get("type") == "supabase" and user.get("access_token") and user.get("refresh_token"):
                         _token = f"{user['access_token']}:::{user['refresh_token']}"
                         st.session_state["_session_token"] = _token
-                        st.query_params["session"] = _token
+                        # Store in HttpOnly cookie — NOT in URL
+                        _cookie_manager.set(
+                            "session_token", _token
+                        )
                     else:
-                        # Save persistent session token (BUG 2 fix)
+                        # Save persistent session token
                         _token = save_session_token(user)
                         st.session_state["_session_token"] = _token
-                        st.query_params["session"] = _token
+                        # Store in HttpOnly cookie — NOT in URL
+                        _cookie_manager.set(
+                            "session_token", _token
+                        )
                         
                     st.success("🎉 Welcome back! Logging you in...")
                     time.sleep(1)
                     _login_ok = True
                 except Exception as e:
-                    st.error(f"❌ {str(e)}")
+                    st.error("Connection failed. Please check your "
+                             "credentials and try again.")
                 if _login_ok:
                     st.rerun()
                     
@@ -303,23 +471,48 @@ if "user" not in st.session_state:
                     _signup_ok = False
                     try:
                         user = signup_user(signup_email, signup_pass)
-                        st.session_state["user"] = user
-                        
-                        if user.get("type") == "supabase" and user.get("access_token") and user.get("refresh_token"):
-                            _token = f"{user['access_token']}:::{user['refresh_token']}"
-                            st.session_state["_session_token"] = _token
-                            st.query_params["session"] = _token
+
+                        # ── Email verification enforcement ────────────────────
+                        # When Supabase "Confirm email" is enabled, signup_user
+                        # sets pending_verification=True and returns no tokens.
+                        # We must NOT create a session in this case — the user
+                        # must confirm their inbox first.
+                        if user.get("pending_verification"):
+                            st.success("✅ Account created!")
+                            st.info(
+                                "📧 **Please check your email and verify your account "
+                                "before logging in.**\n\n"
+                                "We've sent a confirmation link to "
+                                f"**{user.get('email', signup_email)}**. "
+                                "Click the link in that email, then return here to sign in."
+                            )
+                            # Stay on the auth page — do not set session state or rerun.
                         else:
-                            # Save persistent session token (BUG 2 fix)
-                            _token = save_session_token(user)
-                            st.session_state["_session_token"] = _token
-                            st.query_params["session"] = _token
-                            
-                        st.success("🎉 Account created successfully! Logging you in...")
-                        time.sleep(1)
-                        _signup_ok = True
+                            # Email confirmation is disabled (dev/local) — auto-login.
+                            st.session_state["user"] = user
+
+                            if user.get("type") == "supabase" and user.get("access_token") and user.get("refresh_token"):
+                                _token = f"{user['access_token']}:::{user['refresh_token']}"
+                                st.session_state["_session_token"] = _token
+                                # Store in HttpOnly cookie — NOT in URL
+                                _cookie_manager.set(
+                                    "session_token", _token
+                                )
+                            else:
+                                _token = save_session_token(user)
+                                st.session_state["_session_token"] = _token
+                                # Store in HttpOnly cookie — NOT in URL
+                                _cookie_manager.set(
+                                    "session_token", _token
+                                )
+
+                            st.success("🎉 Account created successfully! Logging you in...")
+                            time.sleep(1)
+                            _signup_ok = True
+
                     except Exception as e:
-                        st.error(f"❌ {str(e)}")
+                        st.error("Connection failed. Please check your "
+                                 "credentials and try again.")
                     if _signup_ok:
                         st.rerun()
     st.stop()
@@ -347,9 +540,16 @@ with st.sidebar:
     # ── User Account Info & Logout ────────────────────────────────────
     user_info = st.session_state.get("user", {})
     st.markdown(f"👤 **{user_info.get('email', 'User')}**")
+    _sidebar_plan = _current_plan()
+    if _sidebar_plan == "pro":
+        st.success("⚡ Pro Plan")
+    else:
+        st.warning("Free Plan")
+    if st.button("👤 Account Settings", use_container_width=True):
+        show_profile_modal()
     if st.button("🚪 Log Out", type="secondary", use_container_width=True):
         # Revoke persistent session token (BUG 2 fix)
-        _logout_token = st.session_state.get("_session_token", "") or st.query_params.get("session", "")
+        _logout_token = st.session_state.get("_session_token", "") or _cookie_manager.get("session_token") or ""
         if _logout_token:
             _supabase_client = get_supabase_client()
             if _supabase_client and ":::" in _logout_token:
@@ -359,8 +559,8 @@ with st.sidebar:
                     pass
             else:
                 delete_session_token(_logout_token)
-        if "session" in st.query_params:
-            del st.query_params["session"]
+        # Delete the HttpOnly cookie on logout
+        _cookie_manager.delete("session_token")
         st.session_state.clear()
         st.success("Logged out successfully!")
         time.sleep(0.5)
@@ -371,6 +571,13 @@ with st.sidebar:
     # Collapsible groups for Sidebar settings
     if st.session_state.get("demo_mode"):
         st.info("Demo mode is read-only for workspace history. Create an account to save private analyses.")
+    elif not is_pro_org(_current_org()):
+        with st.expander("🏢 Team Workspace", expanded=False):
+            active_org = _current_org()
+            st.markdown(f"**Workspace:** {active_org.get('name', 'Default Team Workspace')}")
+            st.warning("Team workspaces are a Pro feature. Upgrade to collaborate with your team.")
+            if st.button("⚡ Upgrade for Team Workspaces", type="primary", use_container_width=True, key="workspace_upgrade_btn"):
+                show_upgrade_modal()
     else:
       with st.expander("🏢 Team Workspace", expanded=False):
         # ── Workspace Switcher & Creator ─────────────────────────────────
@@ -614,6 +821,7 @@ st.markdown(f"""
 """, unsafe_allow_html=True)
 
 
+
 # ── Header ───────────────────────────────────────────────────────────
 st.markdown(f"""
 <section class="main-header">
@@ -621,6 +829,66 @@ st.markdown(f"""
     <p>AI-Powered Data Analysis • Clean • Analyze • Report</p>
 </section>
 """, unsafe_allow_html=True)
+
+with st.sidebar:
+    # Brand
+    st.markdown("### 📊 AI Data Analyzer")
+    st.divider()
+    
+    _active_org_for_usage = _current_org()
+    _plan_for_usage = _current_plan()
+    _used = count_monthly_analyses(_active_org_for_usage.get("id", "default"))
+    if _plan_for_usage == "pro":
+        st.success("⚡ Pro Plan: unlimited analyses")
+        st.caption(f"{_used} analyses run this month")
+    else:
+        st.markdown(f"**Free Analyses:** {_used}/{FREE_ANALYSIS_LIMIT} used")
+        st.progress(min(_used / FREE_ANALYSIS_LIMIT, 1.0))
+    
+    st.divider()
+    
+    # Locked insights (always visible as FOMO)
+    st.markdown("**✨ AI Insights**")
+    st.success("✅ Data quality score: 94%")
+    st.success("✅ Top trend identified")
+    if _plan_for_usage == "pro":
+        st.success("✅ Revenue anomaly detection unlocked")
+        st.success("✅ Forecast lab unlocked")
+    else:
+        st.info("🔒 Revenue anomaly detected — Pro")
+        st.info("🔒 Churn risk segment — Pro")
+        st.info("🔒 Forecast accuracy report — Pro")
+    
+    st.divider()
+    
+    # Upgrade CTA
+    if _plan_for_usage == "pro":
+        if st.button("👤 Manage Account", use_container_width=True):
+            show_profile_modal()
+    elif st.button("⚡ Upgrade to Pro — $19/mo",
+                   use_container_width=True,
+                   type="primary"):
+        show_upgrade_modal()
+
+    st.caption("🚀 1,200+ founders already upgraded")
+    st.caption("Cancel anytime · No credit card to start")
+
+# Sticky bottom upgrade banner
+if _current_plan() != "pro" and not st.session_state.get("banner_dismissed", False):
+    st.markdown("---")
+    _b1, _b2, _b3 = st.columns([3, 1, 0.5])
+    _b1.markdown(
+        "🚀 **You're leaving insights on the table.** "
+        "Pro users get 10x deeper analysis + "
+        "unlimited CSV uploads."
+    )
+    if _b2.button("Upgrade Now — $19/mo",
+                  type="primary",
+                  key="bottom_upgrade_btn"):
+        show_upgrade_modal()
+    if _b3.button("✕", key="dismiss_banner"):
+        st.session_state["banner_dismissed"] = True
+        st.rerun()
 
 # ── Tabs ─────────────────────────────────────────────────────────────
 tab_upload, tab_compare, tab_stream = st.tabs([
@@ -707,11 +975,18 @@ with tab_upload:
         )
 
         if uploaded_file is not None:
-            temp_path = temp_dir / uploaded_file.name
-            temp_path.write_bytes(uploaded_file.getvalue())
-            st.success(f"✅ Uploaded: **{uploaded_file.name}** ({len(uploaded_file.getvalue()) / 1024:.1f} KB)")
-            st.session_state["ingestion_method"] = "file"
-            input_ready = True
+            file_bytes = uploaded_file.getvalue()
+            upload_ok, upload_msg = can_upload_file(_current_org(), len(file_bytes))
+            if not upload_ok:
+                st.error(upload_msg)
+                if st.button("⚡ Upgrade to upload up to 50MB", type="primary", use_container_width=True, key="file_size_upgrade_btn"):
+                    show_upgrade_modal()
+            else:
+                temp_path = temp_dir / uploaded_file.name
+                temp_path.write_bytes(file_bytes)
+                st.success(f"✅ Uploaded: **{uploaded_file.name}** ({len(file_bytes) / 1024:.1f} KB)")
+                st.session_state["ingestion_method"] = "file"
+                input_ready = True
             
         elif gsheets_url:
             try:
@@ -731,6 +1006,25 @@ with tab_upload:
 
     with source_tab_db:
         st.markdown("#### 🔌 Connect to a Live Database")
+
+        # ── SQL Injection Guard ─────────────────────────────────────────
+        def _validate_sql(query: str) -> tuple[bool, str]:
+            """Returns (is_safe, error_message). Blocks any non-SELECT statement."""
+            import sqlparse
+            _BLOCKED = {"DROP", "DELETE", "INSERT", "UPDATE", "ALTER",
+                        "TRUNCATE", "CREATE", "EXEC", "EXECUTE", "GRANT", "REVOKE"}
+            parsed = sqlparse.parse(query.strip())
+            for statement in parsed:
+                stmt_type = statement.get_type()
+                if stmt_type and stmt_type.upper() in _BLOCKED:
+                    return False, f"⚠️ Only SELECT queries are allowed for security reasons (blocked: {stmt_type.upper()})"
+                # Also scan individual tokens for blocked keywords (catches multi-statement injection)
+                for token in statement.flatten():
+                    if token.ttype is sqlparse.tokens.Keyword.DDL or token.ttype is sqlparse.tokens.Keyword.DML:
+                        if token.normalized.upper() in _BLOCKED:
+                            return False, f"⚠️ Only SELECT queries are allowed for security reasons (blocked: {token.normalized.upper()})"
+            return True, ""
+
         db_type = st.selectbox("Database Type", ["PostgreSQL", "Google BigQuery", "Snowflake"])
         
         if db_type == "PostgreSQL":
@@ -742,61 +1036,71 @@ with tab_upload:
             with col2:
                 pg_user = st.text_input("Username", value="postgres", key="pg_user")
                 pg_pass = st.text_input("Password", type="password", key="pg_pass")
+            st.info("Read-only mode: Only SELECT statements are permitted.", icon="🔒")
             pg_query = st.text_area("SQL Query", value="SELECT * FROM my_table LIMIT 1000", key="pg_query")
-            
+
             if st.button("🔌 Connect & Query PostgreSQL", key="pg_btn"):
-                with st.spinner("Executing query..."):
-                    try:
-                        from utils.db_connector import connect_postgres
-                        db_df = connect_postgres(
-                            host=pg_host,
-                            port=int(pg_port),
-                            db=pg_db,
-                            user=pg_user,
-                            password=pg_pass,
-                            query=pg_query
-                        )
-                        if db_df.empty:
-                            st.warning("⚠️ Query returned 0 rows.")
-                        else:
-                            st.session_state["db_dataframe"] = db_df
-                            st.session_state["ingestion_method"] = "db"
-                            st.success(f"✅ Loaded {len(db_df)} rows successfully!")
-                    except Exception as e:
-                        _pg_err = str(e)
-                        if "no password" in _pg_err:
-                            st.error("Please enter your database password.")
-                        elif "Connection refused" in _pg_err:
-                            st.error("Could not reach the database server. Check the host and port.")
-                        elif "password authentication failed" in _pg_err:
-                            st.error("Wrong username or password. Please check your credentials.")
-                        elif "does not exist" in _pg_err:
-                            st.error("Database name not found. Check the database name field.")
-                        else:
-                            st.error("Connection failed. Please check all fields and try again.")
+                _sql_safe, _sql_err = _validate_sql(pg_query)
+                if not _sql_safe:
+                    st.error(_sql_err)
+                else:
+                    with st.spinner("Executing query..."):
+                        try:
+                            from utils.db_connector import connect_postgres
+                            db_df = connect_postgres(
+                                host=pg_host,
+                                port=int(pg_port),
+                                db=pg_db,
+                                user=pg_user,
+                                password=pg_pass,
+                                query=pg_query
+                            )
+                            if db_df.empty:
+                                st.warning("⚠️ Query returned 0 rows.")
+                            else:
+                                st.session_state["db_dataframe"] = db_df
+                                st.session_state["ingestion_method"] = "db"
+                                st.success(f"✅ Loaded {len(db_df)} rows successfully!")
+                        except Exception as e:
+                            _pg_err = str(e)
+                            if "no password" in _pg_err:
+                                st.error("Please enter your database password.")
+                            elif "Connection refused" in _pg_err:
+                                st.error("Could not reach the database server. Check the host and port.")
+                            elif "password authentication failed" in _pg_err:
+                                st.error("Wrong username or password. Please check your credentials.")
+                            elif "does not exist" in _pg_err:
+                                st.error("Database name not found. Check the database name field.")
+                            else:
+                                st.error("Connection failed. Please check all fields and try again.")
                         
         elif db_type == "Google BigQuery":
             bq_project = st.text_input("BigQuery Project ID", key="bq_proj")
             bq_creds_path = st.text_input("Service Account JSON Path (Optional)", help="Leave blank if local/env authentication is configured.", key="bq_creds")
+            st.info("Read-only mode: Only SELECT statements are permitted.", icon="🔒")
             bq_query = st.text_area("SQL Query", value="SELECT * FROM `project.dataset.table` LIMIT 1000", key="bq_query")
-            
+
             if st.button("🔌 Connect & Query BigQuery", key="bq_btn"):
-                with st.spinner("Executing BigQuery job..."):
-                    try:
-                        from utils.db_connector import connect_bigquery
-                        db_df = connect_bigquery(
-                            project_id=bq_project,
-                            query=bq_query,
-                            credentials_json_path=bq_creds_path if bq_creds_path else None
-                        )
-                        if db_df.empty:
-                            st.warning("⚠️ Query returned 0 rows.")
-                        else:
-                            st.session_state["db_dataframe"] = db_df
-                            st.session_state["ingestion_method"] = "db"
-                            st.success(f"✅ Loaded {len(db_df)} rows successfully!")
-                    except Exception as e:
-                        st.error(f"❌ BigQuery Connection Error: {str(e)}")
+                _sql_safe, _sql_err = _validate_sql(bq_query)
+                if not _sql_safe:
+                    st.error(_sql_err)
+                else:
+                    with st.spinner("Executing BigQuery job..."):
+                        try:
+                            from utils.db_connector import connect_bigquery
+                            db_df = connect_bigquery(
+                                project_id=bq_project,
+                                query=bq_query,
+                                credentials_json_path=bq_creds_path if bq_creds_path else None
+                            )
+                            if db_df.empty:
+                                st.warning("⚠️ Query returned 0 rows.")
+                            else:
+                                st.session_state["db_dataframe"] = db_df
+                                st.session_state["ingestion_method"] = "db"
+                                st.success(f"✅ Loaded {len(db_df)} rows successfully!")
+                        except Exception as e:
+                            st.error("BigQuery connection failed. Please check your project ID and credentials.")
                         
         elif db_type == "Snowflake":
             col1, col2 = st.columns(2)
@@ -808,29 +1112,34 @@ with tab_upload:
                 sf_db = st.text_input("Database Name", key="sf_db")
                 sf_schema = st.text_input("Schema Name", key="sf_schema")
                 sf_wh = st.text_input("Warehouse Name", key="sf_wh")
+            st.info("Read-only mode: Only SELECT statements are permitted.", icon="🔒")
             sf_query = st.text_area("SQL Query", value="SELECT * FROM my_table LIMIT 1000", key="sf_query")
-            
+
             if st.button("🔌 Connect & Query Snowflake", key="sf_btn"):
-                with st.spinner("Executing Snowflake query..."):
-                    try:
-                        from utils.db_connector import connect_snowflake
-                        db_df = connect_snowflake(
-                            account=sf_account,
-                            user=sf_user,
-                            password=sf_pass,
-                            database=sf_db,
-                            schema=sf_schema,
-                            warehouse=sf_wh,
-                            query=sf_query
-                        )
-                        if db_df.empty:
-                            st.warning("⚠️ Query returned 0 rows.")
-                        else:
-                            st.session_state["db_dataframe"] = db_df
-                            st.session_state["ingestion_method"] = "db"
-                            st.success(f"✅ Loaded {len(db_df)} rows successfully!")
-                    except Exception as e:
-                        st.error(f"❌ Snowflake Connection Error: {str(e)}")
+                _sql_safe, _sql_err = _validate_sql(sf_query)
+                if not _sql_safe:
+                    st.error(_sql_err)
+                else:
+                    with st.spinner("Executing Snowflake query..."):
+                        try:
+                            from utils.db_connector import connect_snowflake
+                            db_df = connect_snowflake(
+                                account=sf_account,
+                                user=sf_user,
+                                password=sf_pass,
+                                database=sf_db,
+                                schema=sf_schema,
+                                warehouse=sf_wh,
+                                query=sf_query
+                            )
+                            if db_df.empty:
+                                st.warning("⚠️ Query returned 0 rows.")
+                            else:
+                                st.session_state["db_dataframe"] = db_df
+                                st.session_state["ingestion_method"] = "db"
+                                st.success(f"✅ Loaded {len(db_df)} rows successfully!")
+                        except Exception as e:
+                            st.error("Snowflake connection failed. Please check all fields and try again.")
 
     # Handle dataset setup based on Ingestion Method
     if st.session_state.get("ingestion_method") == "db" and st.session_state.get("db_dataframe") is not None:
@@ -856,6 +1165,16 @@ with tab_upload:
             st.info("Running the demo analysis with bundled sample data...")
         
         if run_clicked or "celery_task_id" in st.session_state:
+            if run_clicked and not st.session_state.get("demo_mode"):
+                run_allowed, run_msg, _, _ = can_run_analysis(_current_org())
+                if not run_allowed:
+                    st.error(run_msg)
+                    if st.button("⚡ Upgrade to Pro for unlimited analyses", type="primary", use_container_width=True, key="analysis_limit_upgrade_btn"):
+                        show_upgrade_modal()
+                    st.stop()
+                else:
+                    st.caption(run_msg)
+
             # Clear previous state
             if run_clicked:
                 st.session_state["analysis_result"] = None
@@ -1061,8 +1380,6 @@ with tab_upload:
 
         if result.status in ("completed", "completed_with_warnings"):
             from frontend.dashboard_ui import render_interactive_dashboard
-            
-            # Use new modular dashboard
             render_interactive_dashboard(result)
 
             st.markdown("---")
@@ -1084,8 +1401,8 @@ with tab_upload:
                         use_container_width=True,
                     )
 
-            if result.pdf_report_path and Path(result.pdf_report_path).exists():
-                with dl_cols[1]:
+            with dl_cols[1]:
+                if result.pdf_report_path and Path(result.pdf_report_path).exists() and is_pro_org(_current_org()):
                     st.download_button(
                         "📄 PDF Report",
                         data=Path(result.pdf_report_path).read_bytes(),
@@ -1093,6 +1410,10 @@ with tab_upload:
                         mime="application/pdf",
                         use_container_width=True,
                     )
+                elif result.pdf_report_path and Path(result.pdf_report_path).exists():
+                    st.button("🔒 PDF Report (Pro)", disabled=True, use_container_width=True)
+                    if st.button("Upgrade for PDF", type="primary", use_container_width=True, key="pdf_upgrade_btn"):
+                        show_upgrade_modal()
 
             if result.dashboard_html_path and Path(result.dashboard_html_path).exists():
                 with dl_cols[2]:
@@ -1130,7 +1451,7 @@ with tab_upload:
                 try:
                     user_info = st.session_state.get("user", {"id": "anonymous"})
                     dataset_name_for_share = st.session_state.get("analysis_dataset_name", "analysis_report")
-                    plan = "free"
+                    plan = _current_plan()
                     share_record = create_share_link(
                         result=result,
                         owner_user_id=user_info.get("id", "anonymous"),

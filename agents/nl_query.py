@@ -65,10 +65,10 @@ class NLQueryAgent(BaseAgent):
                 schema_summary = self._get_schema_summary(df)
                 system_prompt = self._build_system_prompt(self._detect_dataset_type(df))
                 user_prompt = self._build_user_prompt(query, schema_summary)
-                
+
                 # Use IntelligenceEngine's client if available
                 response = self.intelligence_engine.llm.generate_json(system_prompt, user_prompt)
-                
+
                 if response:
                     chart_config = response.get("chart_config")
                     # Validate that referenced columns exist in the dataframe
@@ -86,70 +86,24 @@ class NLQueryAgent(BaseAgent):
                         confidence_level="LLM"
                     )
             except Exception as e:
-                logger.warning(f"LLM interpretation failed, falling back: {e}")
+                logger.warning(f"LLM interpretation failed: {e}")
+                return NLQueryResult(
+                    error=(
+                        "AI features are currently unavailable. "
+                        "Please use the manual chart builder instead."
+                    ),
+                    confidence_level="Deterministic"
+                )
 
-
-        # ── Deterministic Fallback ──────────────────────────────────
-        return self._execute_deterministic(query, df)
-
-    def _execute_deterministic(self, query: str, df: pd.DataFrame) -> NLQueryResult:
-        """Rule-based interpretation of user query."""
-        num_cols = df.select_dtypes(include=['number']).columns.tolist()
-        cat_cols = df.select_dtypes(include=['object', 'category']).columns.tolist()
-        date_cols = df.select_dtypes(include=['datetime']).columns.tolist()
-        
-        # Heuristic: Pick columns with most variance/data
-        best_num = num_cols[0] if num_cols else None
-        if len(num_cols) > 1:
-            best_num = df[num_cols].std().idxmax()
-            
-        best_cat = cat_cols[0] if cat_cols else None
-        
-        chart_type = "bar"
-        x_col = best_cat or (date_cols[0] if date_cols else None)
-        y_col = best_num
-        agg = "mean"
-        
-        # Keyword Mapping
-        if any(w in query for w in ["trend", "over time", "history", "series"]):
-            chart_type = "line"
-            x_col = date_cols[0] if date_cols else (x_col)
-            agg = "sum"
-        elif any(w in query for w in ["dist", "spread", "histogram", "range"]):
-            chart_type = "histogram"
-            x_col = best_num
-            y_col = None
-            agg = "none"
-        elif any(w in query for w in ["corr", "relat", "vs", "against"]):
-            chart_type = "scatter"
-            x_col = num_cols[0] if num_cols else None
-            y_col = num_cols[1] if len(num_cols) > 1 else num_cols[0]
-            agg = "none"
-        elif any(w in query for w in ["by", "per", "group", "breakdown"]):
-            chart_type = "bar"
-            # Try to find which categorical column is mentioned
-            for c in cat_cols:
-                if c.lower() in query:
-                    x_col = c
-                    break
-            agg = "sum"
-
-        # Safe Column Check
-        if not x_col and num_cols: x_col = num_cols[0]
-        
-        chart_config = {
-            "type": chart_type,
-            "x": x_col,
-            "y": y_col,
-            "agg": agg,
-            "title": f"Deterministic Analysis: {query.capitalize()}"
-        }
-
+        # ── AI disabled entirely — surface clear error instead of guessing ──
         return NLQueryResult(
-            explanation=f"Interpreted query '{query}' using rule-based logic (AI is disabled or unavailable).",
-            chart_config=chart_config,
+            error=(
+                "AI features are currently unavailable. "
+                "Please use the manual chart builder instead."
+            ),
             confidence_level="Deterministic"
         )
+
 
     def _detect_dataset_type(self, df: pd.DataFrame) -> str:
         """Detect dataset domain from column names for context-aware prompting."""

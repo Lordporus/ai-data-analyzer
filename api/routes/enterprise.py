@@ -53,7 +53,7 @@ async def enterprise_analyze(
 
     # ── Return structured JSON ───────────────────────────────────────
     summary = result.summary_dict()
-    base = f"/outputs/{job_id}"
+    base = f"/api/download/{job_id}"
     summary["downloads"] = {
         "cleaned_csv": f"{base}/cleaned_data.csv",
         "dashboard_html": f"{base}/dashboard.html",

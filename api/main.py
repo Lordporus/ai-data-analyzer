@@ -17,6 +17,7 @@ from api.routes.download import router as download_router
 from api.routes.enterprise import router as enterprise_router
 from api.routes.status import router as status_router
 from api.routes.share import router as share_router
+from api.routes.razorpay_billing import router as razorpay_billing_router
 from config.settings import BRAND_NAME, OUTPUT_DIR, is_llm_enabled
 
 # ── Logging ──────────────────────────────────────────────────────────
@@ -50,8 +51,9 @@ app.add_middleware(
 )
 
 # ── Static files (output downloads) ─────────────────────────────────
+# ── Static files (output downloads) ─────────────────────────────────
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-app.mount("/outputs", StaticFiles(directory=str(OUTPUT_DIR)), name="outputs")
+# Removed public /outputs mount to secure generated files
 
 # ── Routes ───────────────────────────────────────────────────────────
 app.include_router(upload_router, prefix="/api", tags=["Upload & Analyze"])
@@ -59,6 +61,7 @@ app.include_router(status_router, prefix="/api", tags=["Job Status"])
 app.include_router(download_router, prefix="/api", tags=["Downloads"])
 app.include_router(enterprise_router, prefix="/api/v1", tags=["Enterprise API"])
 app.include_router(share_router, tags=["Shared Reports"])
+app.include_router(razorpay_billing_router, prefix="/api", tags=["Razorpay Billing"])
 
 
 @app.get("/", tags=["Health"])

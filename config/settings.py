@@ -65,8 +65,9 @@ API_KEY_ENTERPRISE = os.getenv("API_KEY_ENTERPRISE", "")
 # ── Usage tracking ───────────────────────────────────────────────────────
 ENABLE_USAGE_TRACKING = os.getenv("ENABLE_USAGE_TRACKING", "false").lower() == "true"
 
-# ── Billing / Stripe (optional) ───────────────────────────────────────
-STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "")
-STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
-STRIPE_PRO_PRICE_ID = os.getenv("STRIPE_PRO_PRICE_ID", "")
-STRIPE_TEAM_PRICE_ID = os.getenv("STRIPE_TEAM_PRICE_ID", "")
+# ── Billing / Razorpay (optional until monetization is enabled) ───────
+RAZORPAY_KEY_ID = os.getenv("RAZORPAY_KEY_ID", "")
+RAZORPAY_KEY_SECRET = os.getenv("RAZORPAY_KEY_SECRET", "")
+RAZORPAY_WEBHOOK_SECRET = os.getenv("RAZORPAY_WEBHOOK_SECRET", "")
+RAZORPAY_PRO_PLAN_ID = os.getenv("RAZORPAY_PRO_PLAN_ID", "")
+RAZORPAY_PORTAL_URL = os.getenv("RAZORPAY_PORTAL_URL", "")

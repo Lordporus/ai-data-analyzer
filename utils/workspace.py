@@ -43,7 +43,8 @@ def create_organization(name: str) -> Dict:
             res = client.table("organizations").insert({
                 "id": org_id,
                 "name": name,
-                "created_at": created_at
+                "created_at": created_at,
+                "plan": "free",
             }).execute()
             if res.data:
                 return res.data[0]
@@ -52,7 +53,7 @@ def create_organization(name: str) -> Dict:
 
     # Fallback Local Storage
     data = _load_local_data()
-    org = {"id": org_id, "name": name, "created_at": created_at}
+    org = {"id": org_id, "name": name, "created_at": created_at, "plan": "free"}
     data["organizations"][org_id] = org
     _save_local_data(data)
     return org
@@ -74,6 +75,8 @@ def get_organizations() -> List[Dict]:
     # Fallback Local Storage
     data = _load_local_data()
     orgs = list(data["organizations"].values())
+    for org in orgs:
+        org.setdefault("plan", "free")
     if not orgs:
         default_org = create_organization("Default Team Workspace")
         return [default_org]
@@ -143,3 +146,29 @@ def get_org_analysis_history(org_id: str) -> List[Dict]:
     runs = [run for run in data["analysis_runs"] if run["org_id"] == org_id]
     runs.sort(key=lambda x: x.get("created_at", ""), reverse=True)
     return runs
+
+def check_job_ownership(job_id: str, user_id: str) -> bool:
+    """
+    Checks if an analysis run matching the job_id belongs to the specified user_id.
+    """
+    client = _get_service_client()
+    if client:
+        try:
+            # check if any match
+            res = client.table("analysis_runs").select("*").ilike("output_path", f"%{job_id}%").execute()
+            if res.data:
+                for run in res.data:
+                    if run.get("user_id") == user_id:
+                        return True
+                return False
+        except Exception:
+            pass
+            
+    # Fallback Local Storage
+    data = _load_local_data()
+    for run in data.get("analysis_runs", []):
+        out_path = run.get("output_path", "")
+        if job_id in out_path:
+            if run.get("user_id") == user_id:
+                return True
+    return False

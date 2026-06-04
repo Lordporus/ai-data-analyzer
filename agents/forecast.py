@@ -47,13 +47,16 @@ class ForecastResult:
     is_time_series: bool = False
     primary_date_col: str = ""
     period_type: str = "D"  # D=Daily, W=Weekly, M=Monthly, Y=Yearly
-    
+
     # Structure: {metric_name: {dates: [], values: [], lower: [], upper: [], r2: float, confidence: str, model_type: str, ...}}
     forecasts: Dict[str, Dict[str, Any]] = field(default_factory=dict)
-    
+
     # Simulation Defaults (to help UI)
     available_metrics: List[str] = field(default_factory=list)
     audit_log: Dict[str, Any] = field(default_factory=dict)
+
+    # User-facing warnings surfaced from model fallbacks or data issues
+    warnings: List[str] = field(default_factory=list)
 
     def get_forecast(self, metric: str) -> Optional[Dict[str, Any]]:
         return self.forecasts.get(metric)
@@ -109,11 +112,12 @@ class ForecastAgent(BaseAgent):
 
             # 3. Generate Base Forecasts
             forecasts = {}
+            hw_warnings: List[str] = []
             for metric in forecastable:
-                f_data = self._generate_forecast_v2(df, date_col, metric, period)
+                f_data = self._generate_forecast_v2(df, date_col, metric, period, hw_warnings)
                 if f_data:
                     forecasts[metric] = f_data
-            
+
             self._log(f"Generated ForecastEngine 3.0 results for {len(forecasts)} metrics.")
 
             audit_log = {}
@@ -121,14 +125,14 @@ class ForecastAgent(BaseAgent):
                 model_type = f_data.get("forecast_model_type", "Linear")
                 r2 = f_data.get("r2", 0.0)
                 conf = f_data.get("confidence_level", "LOW")
-                
+
                 if model_type == "Holt-Winters":
                     formula = "Holt-Winters Triple Exponential Smoothing (statsmodels.tsa.holtwinters.ExponentialSmoothing)"
                     threshold = f"Seasonal cycle of {f_data.get('dominant_lag', 0)} periods detected; residual variance based confidence bounds"
                 else:
                     formula = "Ordinary Least Squares (OLS) Linear Regression (scipy.stats.linregress)"
                     threshold = "Trend-line extrapolated over future index; standard deviation based rolling bounds"
-                    
+
                 audit_log[metric] = {
                     "columns_used": [metric, date_col],
                     "formula": formula,
@@ -143,9 +147,10 @@ class ForecastAgent(BaseAgent):
                 period_type=period,
                 forecasts=forecasts,
                 available_metrics=list(forecasts.keys()),
-                audit_log=audit_log
+                audit_log=audit_log,
+                warnings=hw_warnings,
             )
-            
+
             return result
 
         except Exception as e:
@@ -218,10 +223,18 @@ class ForecastAgent(BaseAgent):
         except:
             return best_col, "D"
 
-    def _generate_forecast_v2(self, df: pd.DataFrame, date_col: str, metric: str, period: str, periods=10) -> Optional[Dict]:
+    def _generate_forecast_v2(self, df: pd.DataFrame, date_col: str, metric: str, period: str, hw_warnings: List[str] = None, periods: int = None) -> Optional[Dict]:
         """
-        ForecastEngine 3.0 Adaptive Implementation
+        ForecastEngine 3.0 Adaptive Implementation.
+        Periods are determined dynamically by frequency if not explicitly passed.
         """
+        # Dynamic period selection based on data frequency
+        if periods is None:
+            _PERIOD_MAP = {"D": 30, "W": 12, "M": 12, "Y": 5}
+            periods = _PERIOD_MAP.get(period, 10)
+
+        if hw_warnings is None:
+            hw_warnings = []
         ts_df = df[[date_col, metric]].dropna().sort_values(by=date_col)
         
         # Validation Rule: N < 8 suppressed
@@ -305,6 +318,10 @@ class ForecastAgent(BaseAgent):
                     direction = "increasing" if hw_slope > 0.0001 else "decreasing" if hw_slope < -0.0001 else "stable"
                     
                 except Exception as hw_err:
+                    hw_warnings.append(
+                        f"Holt-Winters model failed for '{metric}' (possible data issue: {hw_err}). "
+                        "Falling back to linear regression."
+                    )
                     logger.warning(f"Holt-Winters failed for {metric}, falling back: {hw_err}")
                     model_type = "Linear"
 

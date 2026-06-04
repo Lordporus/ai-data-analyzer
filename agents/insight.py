@@ -23,10 +23,21 @@ from utils.intelligence_engine import IntelligenceEngine
 
 logger = logging.getLogger(__name__)
 
-# Columns that are identifiers / system artefacts — never useful for insights
+import re
+
+# Structural/identifier column patterns — exact-match ONLY via re.fullmatch().
+# Using exact regex prevents false positives on names like video_id, product_id,
+# valid, width, etc. Only columns whose ENTIRE name matches one of these patterns
+# will be excluded from analysis.
 EXCLUDE_PATTERNS = [
-    'index', 'id', 'unnamed', 'row', 'serial',
-    'sr_no', 'sl_no', 'cust_id', 'order_id',
+    r"^id$",
+    r"^index$",
+    r"^rownum$",
+    r"^row_number$",
+    r"^unnamed.*",      # Pandas unnamed columns (e.g. "Unnamed: 0")
+    r"^sr_no$",
+    r"^sl_no$",
+    r"^serial$",
 ]
 
 # Words/phrases that must NEVER appear in any user-facing output
@@ -289,16 +300,18 @@ class InsightAgent(BaseAgent):
     # ── Business Column Filter ────────────────────────────────────────
     def _filter_business_columns(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        Drops identifier/system columns (index, id, serial numbers, etc.)
-        before any statistical analysis so they never pollute insights.
+        Drops structural identifier/system columns before any statistical
+        analysis so they never pollute insights.
+
+        Uses re.fullmatch() against EXCLUDE_PATTERNS so that only columns
+        whose ENTIRE name matches a pattern are dropped.  This prevents
+        false positives on names like 'video_id', 'product_id', 'valid', etc.
         """
-        cols_to_keep = [
-            col for col in df.columns
-            if not any(
-                pattern in col.lower().replace(' ', '_').replace('-', '_')
-                for pattern in EXCLUDE_PATTERNS
-            )
-        ]
+        def _is_excluded(col: str) -> bool:
+            col_normalized = col.lower().strip().replace(' ', '_').replace('-', '_')
+            return any(re.fullmatch(pattern, col_normalized) for pattern in EXCLUDE_PATTERNS)
+
+        cols_to_keep = [col for col in df.columns if not _is_excluded(col)]
         dropped = set(df.columns) - set(cols_to_keep)
         if dropped:
             logger.debug("InsightAgent: dropped identifier columns: %s", dropped)

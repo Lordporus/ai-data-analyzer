@@ -54,7 +54,7 @@ class CleaningAgent(BaseAgent):
 
     name = "CleaningAgent"
 
-    def _execute(self, input_data: IngestionResult) -> CleaningResult:
+    def _execute(self, input_data: IngestionResult, handle_missing: str = "ignore") -> CleaningResult:
         df = input_data.dataframe.copy()
         types = dict(input_data.detected_types)
         clog = CleaningLog()
@@ -99,37 +99,41 @@ class CleaningAgent(BaseAgent):
                 except Exception:
                     clog.add("convert_dates", f"Could not parse '{col}' as datetime", 0)
 
-        # 4 ── Handle missing numeric values (median fill) ────────────
-        num_cols = [c for c, t in types.items() if t == "numeric"]
-        for col in num_cols:
-            if col in df.columns:
-                n_missing = int(df[col].isnull().sum())
-                if n_missing > 0:
-                    median_val = df[col].median()
-                    df[col] = df[col].fillna(median_val)
-                    clog.add(
-                        "fill_missing",
-                        f"Filled {n_missing} nulls in '{col}' with median ({median_val:.2f})",
-                        n_missing,
-                    )
-
-        # 5 ── Handle missing categorical values (mode fill) ──────────
-        for col in str_cols:
-            if col in df.columns:
-                n_missing = int(df[col].isin(["nan", ""]).sum() + df[col].isnull().sum())
-                if n_missing > 0:
-                    mode_val = df[col].replace(["nan", ""], np.nan).mode()
-                    if len(mode_val) > 0:
-                        df[col] = df[col].replace(["nan", ""], mode_val.iloc[0])
-                        df[col] = df[col].fillna(mode_val.iloc[0])
+        # 4 ── Handle missing numeric values ─────────────────────────────
+        # Skipped by default (handle_missing="ignore") to protect raw data.
+        # Only applied when caller explicitly requests imputation.
+        if handle_missing == "impute":
+            num_cols = [c for c, t in types.items() if t == "numeric"]
+            for col in num_cols:
+                if col in df.columns:
+                    n_missing = int(df[col].isnull().sum())
+                    if n_missing > 0:
+                        median_val = df[col].median()
+                        df[col] = df[col].fillna(median_val)
                         clog.add(
                             "fill_missing",
-                            f"Filled {n_missing} blanks in '{col}' with mode ('{mode_val.iloc[0]}')",
+                            f"Filled {n_missing} nulls in '{col}' with median ({median_val:.2f})",
                             n_missing,
                         )
 
+            # 5 ── Handle missing categorical values (mode fill) ────────────
+            for col in str_cols:
+                if col in df.columns:
+                    n_missing = int(df[col].isin(["nan", ""]).sum() + df[col].isnull().sum())
+                    if n_missing > 0:
+                        mode_val = df[col].replace(["nan", ""], np.nan).mode()
+                        if len(mode_val) > 0:
+                            df[col] = df[col].replace(["nan", ""], mode_val.iloc[0])
+                            df[col] = df[col].fillna(mode_val.iloc[0])
+                            clog.add(
+                                "fill_missing",
+                                f"Filled {n_missing} blanks in '{col}' with mode ('{mode_val.iloc[0]}')",
+                                n_missing,
+                            )
+
         # 6 ── Detect outliers via IQR ────────────────────────────────
         outlier_report: Dict[str, int] = {}
+        num_cols = [c for c, t in types.items() if t == "numeric"]
         for col in num_cols:
             if col in df.columns:
                 q1 = df[col].quantile(0.25)

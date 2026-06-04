@@ -55,7 +55,7 @@ class RepairReasoningAgent(BaseAgent):
 
     name = "RepairReasoningAgent"
 
-    def _execute(self, input_data: CleaningResult) -> RepairResult:
+    def _execute(self, input_data: CleaningResult, apply_repairs: bool = False) -> RepairResult:
         df = input_data.dataframe.copy()
         types = input_data.detected_types
         outliers = input_data.outlier_report
@@ -70,17 +70,18 @@ class RepairReasoningAgent(BaseAgent):
             pct_missing = n_missing / len(df) * 100
 
             if pct_missing > 60:
-                # Too much missing — drop the column
+                # Too much missing — drop the column (only if consent given)
                 dec = RepairDecision(
                     column=col,
                     issue=f"{pct_missing:.1f}% missing values",
                     strategy="drop_column",
                     reason=f"Over 60% missing — column provides very little signal.",
                 )
-                df = df.drop(columns=[col])
-                dec.applied = True
+                if apply_repairs:
+                    df = df.drop(columns=[col])
+                    dec.applied = True
+                    self._log(f"Dropped column '{col}' ({pct_missing:.1f}% missing)")
                 decisions.append(dec)
-                self._log(f"Dropped column '{col}' ({pct_missing:.1f}% missing)")
 
             elif types.get(col) == "numeric":
                 # Decide mean vs median based on skewness
@@ -94,21 +95,27 @@ class RepairReasoningAgent(BaseAgent):
                     strategy = "fill_mean"
                     reason = f"Skewness = {skew:.2f} (≤1) — mean is appropriate."
 
-                df[col] = df[col].fillna(fill_val)
+                applied = False
+                if apply_repairs:
+                    df[col] = df[col].fillna(fill_val)
+                    applied = True
                 decisions.append(RepairDecision(
                     column=col, issue=f"{n_missing} missing values",
-                    strategy=strategy, reason=reason, applied=True,
+                    strategy=strategy, reason=reason, applied=applied,
                 ))
             else:
                 # Categorical / text — mode fill
                 mode_val = df[col].mode()
                 if len(mode_val) > 0:
-                    df[col] = df[col].fillna(mode_val.iloc[0])
+                    applied = False
+                    if apply_repairs:
+                        df[col] = df[col].fillna(mode_val.iloc[0])
+                        applied = True
                     decisions.append(RepairDecision(
                         column=col, issue=f"{n_missing} missing values",
                         strategy="fill_mode",
                         reason="Categorical column — filled with most frequent value.",
-                        applied=True,
+                        applied=applied,
                     ))
 
         # ── 2) Handle outliers ───────────────────────────────────────
@@ -118,21 +125,24 @@ class RepairReasoningAgent(BaseAgent):
             pct_outliers = n_outliers / len(df) * 100
 
             if pct_outliers > 10:
-                # Many outliers — clip to IQR bounds
+                # Many outliers — clip to IQR bounds (only if consent given)
                 q1 = df[col].quantile(0.25)
                 q3 = df[col].quantile(0.75)
                 iqr = q3 - q1
                 lower = q1 - 1.5 * iqr
                 upper = q3 + 1.5 * iqr
-                df[col] = df[col].clip(lower, upper)
+                applied = False
+                if apply_repairs:
+                    df[col] = df[col].clip(lower, upper)
+                    applied = True
+                    self._log(f"Clipped outliers in '{col}'")
                 decisions.append(RepairDecision(
                     column=col,
                     issue=f"{n_outliers} outliers ({pct_outliers:.1f}%)",
                     strategy="clip_outliers",
                     reason=f"High outlier rate — clipped to [{lower:.2f}, {upper:.2f}].",
-                    applied=True,
+                    applied=applied,
                 ))
-                self._log(f"Clipped outliers in '{col}'")
             else:
                 decisions.append(RepairDecision(
                     column=col,
