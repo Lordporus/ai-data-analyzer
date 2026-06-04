@@ -3,6 +3,21 @@
 ## Overview
 AI Data Analyzer is an enterprise-grade data intelligence platform that ingests raw data (CSV or Google Sheets), cleans and repairs it, runs strategic analysis and forecasting, and automatically generates beautiful dashboards and professional PDF/Markdown executive reports.
 
+## Project Documentation & Planning Contexts
+This repository contains a comprehensive set of planning, audit, and strategy documents that outline the current state and future direction of the platform. Please refer to these files for detailed context:
+
+- **System Architecture & Audits**
+  - `SYSTEM_WALKTHROUGH.md`: Detailed end-to-end guide on the system's current functionality and data flow.
+  - `PROJECT_SYSTEM_AUDIT.md` & `FINAL_DEPLOYMENT_AUDIT_REPORT.md`: Comprehensive reviews of the system's deployment state, codebase health, and infrastructure security.
+- **Agent & Forecasting Upgrades**
+  - `AGENTS.md` & `AGENT_UPGRADE_PLAN.md`: Blueprints for enhancing and modularizing the AI agent ecosystem.
+  - `NIXTLA_UPGRADE.md`: Strategy for integrating advanced time-series forecasting capabilities via Nixtla.
+- **UI & Platform Enhancements**
+  - `UI_IMPLEMENTATION_PLAN.md`: Planned updates for the user interface, particularly the Streamlit frontend.
+  - `WEBSITE_IMPLEMENTATION_PLAN.md` & `WEBSITE_UPGRADE.md`: Guidelines and designs for the broader website and marketing platform presence.
+- **Monetization & Commercialization**
+  - `MONETIZATION_PLAN.md` & `MONETIZATION_WALKTHROUGH.md`: Business logic, subscription tiers (e.g., Razorpay integration), and access-control strategies for commercializing the platform.
+
 ## Features
 - **Data Ingestion**: Support for CSV uploads and Google Sheets (both public and authenticated via service accounts).
 - **Automated Pipeline**: 
@@ -25,6 +40,14 @@ AI Data Analyzer is an enterprise-grade data intelligence platform that ingests 
 - **Task Queue**: Celery, Redis
 - **Database / Auth**: Supabase, PostgreSQL
 - **Cloud / Deployment**: Docker, AWS EC2
+
+## Architecture Diagrams
+
+### Pipeline Dependency Graph
+![Pipeline Dependency Graph](docs/images/pipeline_graph.png)
+
+### Bootstrapping (start.sh)
+![Bootstrapping Graph](docs/images/bootstrapping_graph.png)
 
 ## Setup Instructions (Local Development)
 
