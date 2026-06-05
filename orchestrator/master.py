@@ -93,7 +93,7 @@ class MasterOrchestrator:
     """Execute the full Ingestion → Cleaning → Repair → Insight →
     Dashboard → Report pipeline and return all artefacts."""
 
-    def run(self, csv_path: str | Path | pd.DataFrame, output_dir: str | Path, branding: Optional[Dict[str, Any]] = None, progress_callback: Optional[Callable[[str, float], None]] = None, dataset_name: Optional[str] = None) -> PipelineResult:
+    def run(self, csv_path: str | Path | pd.DataFrame, output_dir: str | Path, branding: Optional[Dict[str, Any]] = None, progress_callback: Optional[Callable[[str, float], None]] = None, dataset_name: Optional[str] = None, is_pro: bool = False) -> PipelineResult:
         if not isinstance(csv_path, pd.DataFrame):
             csv_path = Path(csv_path)
         output_dir = Path(output_dir)
@@ -187,68 +187,72 @@ class MasterOrchestrator:
             )
 
             # ── 7) Save cleaned CSV ──────────────────────────────────
-            try:
-                cleaned_path = output_dir / "cleaned_data.csv"
-                repair_result.dataframe.to_csv(cleaned_path, index=False)
-                result.cleaned_csv_path = str(cleaned_path)
-            except Exception as exc:
-                result.errors.append(f"CSV save failed: {exc}")
-                logger.warning("Could not save cleaned CSV: %s", exc)
+            if is_pro:
+                try:
+                    cleaned_path = output_dir / "cleaned_data.csv"
+                    repair_result.dataframe.to_csv(cleaned_path, index=False)
+                    result.cleaned_csv_path = str(cleaned_path)
+                except Exception as exc:
+                    result.errors.append(f"CSV save failed: {exc}")
+                    logger.warning("Could not save cleaned CSV: %s", exc)
 
             # ── 8) Dashboard [NON-CRITICAL] ──────────────────────────
-            if progress_callback:
-                progress_callback("Building dashboard...", 0.85)
-            dashboard_agent = DashboardAgent()
-            dash_result: DashboardResult = self._safe_run(
-                dashboard_agent,
-                {"insight": insight_result,
-                 "forecast": forecast_result or {},
-                 "quality_before": quality_before,
-                 "quality_after": quality_after,
-                 "output_dir": output_dir},
-                result, "dashboard", critical=False
-            )
-            if dash_result:
-                result.dashboard_html_path = dash_result.html_path
+            if is_pro:
+                if progress_callback:
+                    progress_callback("Building dashboard...", 0.85)
+                dashboard_agent = DashboardAgent()
+                dash_result: DashboardResult = self._safe_run(
+                    dashboard_agent,
+                    {"insight": insight_result,
+                     "forecast": forecast_result or {},
+                     "quality_before": quality_before,
+                     "quality_after": quality_after,
+                     "output_dir": output_dir},
+                    result, "dashboard", critical=False
+                )
+                if dash_result:
+                    result.dashboard_html_path = dash_result.html_path
 
             # ── 9) Excel Export [NON-CRITICAL] ───────────────────────
-            try:
-                from utils.excel_export import build_excel_report
+            if is_pro:
+                try:
+                    from utils.excel_export import build_excel_report
 
-                excel_path = output_dir / "analysis_report.xlsx"
-                result.excel_report_path = build_excel_report(
-                    cleaned_df=repair_result.dataframe,
-                    insights=insight_result,
-                    forecasts=forecast_result,
-                    quality_result=quality_after,
-                    brand_config=branding,
-                    output_path=excel_path,
-                )
-            except Exception as exc:
-                result.errors.append(f"Excel export failed: {exc}")
-                logger.warning("Could not save Excel report: %s", exc)
+                    excel_path = output_dir / "analysis_report.xlsx"
+                    result.excel_report_path = build_excel_report(
+                        cleaned_df=repair_result.dataframe,
+                        insights=insight_result,
+                        forecasts=forecast_result,
+                        quality_result=quality_after,
+                        brand_config=branding,
+                        output_path=excel_path,
+                    )
+                except Exception as exc:
+                    result.errors.append(f"Excel export failed: {exc}")
+                    logger.warning("Could not save Excel report: %s", exc)
 
             # ── 10) Report [NON-CRITICAL] ────────────────────────────
-            if progress_callback:
-                progress_callback("Creating PDF/Markdown reports...", 0.95)
-            report_agent = ReportAgent()
-            report_result: ReportResult = self._safe_run(
-                report_agent,
-                {"ingestion": ingestion_result,
-                 "cleaning": cleaning_result,
-                 "repair": repair_result,
-                 "insight": insight_result,
-                 "forecast": forecast_result or {},
-                 "quality_before": quality_before,
-                 "quality_after": quality_after,
-                 "output_dir": output_dir,
-                 "branding": branding,
-                 "dataset_name": dataset_name},
-                result, "report", critical=False
-            )
-            if report_result:
-                result.pdf_report_path = report_result.pdf_path
-                result.markdown_report_path = report_result.markdown_path
+            if is_pro:
+                if progress_callback:
+                    progress_callback("Creating PDF/Markdown reports...", 0.95)
+                report_agent = ReportAgent()
+                report_result: ReportResult = self._safe_run(
+                    report_agent,
+                    {"ingestion": ingestion_result,
+                     "cleaning": cleaning_result,
+                     "repair": repair_result,
+                     "insight": insight_result,
+                     "forecast": forecast_result or {},
+                     "quality_before": quality_before,
+                     "quality_after": quality_after,
+                     "output_dir": output_dir,
+                     "branding": branding,
+                     "dataset_name": dataset_name},
+                    result, "report", critical=False
+                )
+                if report_result:
+                    result.pdf_report_path = report_result.pdf_path
+                    result.markdown_report_path = report_result.markdown_path
 
             result.status = "completed" if not result.errors else "completed_with_warnings"
 

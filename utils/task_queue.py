@@ -44,6 +44,7 @@ def run_analysis_sync(
     branding: dict = None,
     progress_callback=None,
     dataset_name: str = None,
+    is_pro: bool = False,
 ) -> dict:
     """
     Synchronous fallback: runs the full pipeline in-process without Celery/Redis.
@@ -62,6 +63,7 @@ def run_analysis_sync(
             branding=branding,
             progress_callback=progress_callback,
             dataset_name=dataset_name,
+            is_pro=is_pro,
         )
 
         # Persist the result as a pickle file (same convention as Celery path)
@@ -105,7 +107,7 @@ try:
     )
 
     @celery_app.task(bind=True)
-    def run_analysis_task(self, file_path_str: str, output_dir_str: str, branding: dict = None, dataset_name: str = None) -> dict:
+    def run_analysis_task(self, file_path_str: str, output_dir_str: str, branding: dict = None, dataset_name: str = None, is_pro: bool = False) -> dict:
         """
         Celery task to run the complete data analysis pipeline.
         Updates task state to show pipeline stage progress.
@@ -131,6 +133,7 @@ try:
                 branding=branding,
                 progress_callback=celery_progress,
                 dataset_name=dataset_name,
+                is_pro=is_pro,
             )
 
             pickle_path = output_dir / "pipeline_result.pkl"
