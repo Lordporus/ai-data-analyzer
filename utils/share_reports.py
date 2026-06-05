@@ -122,15 +122,26 @@ def render_shared_report_html(record: dict, result: Any) -> str:
         except Exception:
             dashboard_html = ""
 
+    # Only render download buttons for Pro-plan share links
+    _share_plan = str(record.get("plan", "free")).lower()
     downloads = []
-    for label, path_attr, mime in [
-        ("PDF Report", "pdf_report_path", "application/pdf"),
-        ("Excel Report", "excel_report_path", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
-        ("Cleaned CSV", "cleaned_csv_path", "text/csv"),
-    ]:
-        url = _output_url(getattr(result, path_attr, ""))
-        if url:
-            downloads.append(f"<a class='button' href='{html.escape(url)}?share_token={token}' type='{mime}'>{html.escape(label)}</a>")
+    if _share_plan == "pro":
+        for label, path_attr, mime in [
+            ("PDF Report", "pdf_report_path", "application/pdf"),
+            ("Excel Report", "excel_report_path", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+            ("Cleaned CSV", "cleaned_csv_path", "text/csv"),
+        ]:
+            url = _output_url(getattr(result, path_attr, ""))
+            if url:
+                _escaped_token = html.escape(record.get("share_token", ""))
+                downloads.append(f"<a class='button' href='{html.escape(url)}?share_token={_escaped_token}' type='{mime}'>{html.escape(label)}</a>")
+
+    _downloads_section = (
+        ''.join(downloads)
+        if downloads
+        else "<p style='color:#8b949e;'>Exports are available on the Pro plan. "
+             "Ask the report owner to upgrade for downloadable artifacts.</p>"
+    )
 
     return f"""<!doctype html>
 <html lang="en">
@@ -170,7 +181,7 @@ def render_shared_report_html(record: dict, result: Any) -> str:
     </section>
     <section>
       <h2>Downloads</h2>
-      {''.join(downloads) or '<p>No downloadable artifacts are available for this report.</p>'}
+      {_downloads_section}
     </section>
     <section>
       <h2>Dashboard Snapshot</h2>

@@ -147,6 +147,54 @@ def get_org_analysis_history(org_id: str) -> List[Dict]:
     runs.sort(key=lambda x: x.get("created_at", ""), reverse=True)
     return runs
 
+def get_job_org_plan(job_id: str) -> str:
+    """
+    Returns the org plan ('free' or 'pro') for the organization that owns
+    the analysis run identified by job_id (matched via output_path).
+    Falls back to 'free' if the job or org cannot be found.
+    """
+    client = _get_service_client()
+    org_id = None
+
+    if client:
+        try:
+            run_res = (
+                client.table("analysis_runs")
+                .select("org_id")
+                .ilike("output_path", f"%{job_id}%")
+                .limit(1)
+                .execute()
+            )
+            if run_res.data:
+                org_id = run_res.data[0].get("org_id")
+            if org_id:
+                org_res = (
+                    client.table("organizations")
+                    .select("plan")
+                    .eq("id", org_id)
+                    .limit(1)
+                    .execute()
+                )
+                if org_res.data:
+                    plan = org_res.data[0].get("plan", "free")
+                    return "pro" if str(plan).lower() == "pro" else "free"
+        except Exception:
+            pass
+
+    # Local JSON fallback
+    data = _load_local_data()
+    for run in data.get("analysis_runs", []):
+        if job_id in run.get("output_path", ""):
+            org_id = run.get("org_id")
+            break
+    if org_id:
+        org = data.get("organizations", {}).get(org_id, {})
+        plan = org.get("plan", "free")
+        return "pro" if str(plan).lower() == "pro" else "free"
+
+    return "free"
+
+
 def check_job_ownership(job_id: str, user_id: str) -> bool:
     """
     Checks if an analysis run matching the job_id belongs to the specified user_id.

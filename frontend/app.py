@@ -1247,6 +1247,7 @@ with tab_upload:
                                 str(job_output),
                                 branding=branding_config,
                                 dataset_name=uploaded_file.name if uploaded_file else temp_path.name,
+                                is_pro=is_pro_org(_current_org()),
                             )
                             st.session_state["celery_task_id"] = task.id
                         else:
@@ -1305,6 +1306,7 @@ with tab_upload:
                             branding=branding_config,
                             progress_callback=_sync_progress,
                             dataset_name=uploaded_file.name if uploaded_file else temp_path.name,
+                            is_pro=is_pro_org(_current_org()),
                         )
 
                         if result_dict.get("status") == "failed":
@@ -1391,59 +1393,80 @@ with tab_upload:
             # Check files exist on disk (pipeline saves them)
             # Using paths from stored result object
             
-            if result.cleaned_csv_path and Path(result.cleaned_csv_path).exists():
-                with dl_cols[0]:
-                    st.download_button(
-                        "📊 Cleaned CSV",
-                        data=Path(result.cleaned_csv_path).read_bytes(),
-                        file_name="cleaned_data.csv",
-                        mime="text/csv",
-                        use_container_width=True,
-                    )
+            with dl_cols[0]:
+                if is_pro_org(_current_org()):
+                    if getattr(result, "cleaned_csv_path", "") and Path(result.cleaned_csv_path).exists():
+                        st.download_button(
+                            "📊 Cleaned CSV",
+                            data=Path(result.cleaned_csv_path).read_bytes(),
+                            file_name="cleaned_data.csv",
+                            mime="text/csv",
+                            use_container_width=True,
+                        )
+                else:
+                    st.button("🔒 Cleaned CSV (Pro)", disabled=True, use_container_width=True, key="csv_lock")
+                    if st.button("Upgrade for CSV", type="primary", use_container_width=True, key="csv_upgrade_btn"):
+                        show_upgrade_modal()
 
             with dl_cols[1]:
-                if result.pdf_report_path and Path(result.pdf_report_path).exists() and is_pro_org(_current_org()):
-                    st.download_button(
-                        "📄 PDF Report",
-                        data=Path(result.pdf_report_path).read_bytes(),
-                        file_name="report.pdf",
-                        mime="application/pdf",
-                        use_container_width=True,
-                    )
-                elif result.pdf_report_path and Path(result.pdf_report_path).exists():
-                    st.button("🔒 PDF Report (Pro)", disabled=True, use_container_width=True)
+                if is_pro_org(_current_org()):
+                    if getattr(result, "pdf_report_path", "") and Path(result.pdf_report_path).exists():
+                        st.download_button(
+                            "📄 PDF Report",
+                            data=Path(result.pdf_report_path).read_bytes(),
+                            file_name="report.pdf",
+                            mime="application/pdf",
+                            use_container_width=True,
+                        )
+                else:
+                    st.button("🔒 PDF Report (Pro)", disabled=True, use_container_width=True, key="pdf_lock")
                     if st.button("Upgrade for PDF", type="primary", use_container_width=True, key="pdf_upgrade_btn"):
                         show_upgrade_modal()
 
-            if result.dashboard_html_path and Path(result.dashboard_html_path).exists():
-                with dl_cols[2]:
-                    st.download_button(
-                        "📊 Dashboard HTML",
-                        data=Path(result.dashboard_html_path).read_bytes(),
-                        file_name="dashboard.html",
-                        mime="text/html",
-                        use_container_width=True,
-                    )
+            with dl_cols[2]:
+                if is_pro_org(_current_org()):
+                    if getattr(result, "dashboard_html_path", "") and Path(result.dashboard_html_path).exists():
+                        st.download_button(
+                            "📊 Dashboard HTML",
+                            data=Path(result.dashboard_html_path).read_bytes(),
+                            file_name="dashboard.html",
+                            mime="text/html",
+                            use_container_width=True,
+                        )
+                else:
+                    st.button("🔒 Dashboard (Pro)", disabled=True, use_container_width=True, key="html_lock")
+                    if st.button("Upgrade for HTML", type="primary", use_container_width=True, key="html_upgrade_btn"):
+                        show_upgrade_modal()
 
-            if result.markdown_report_path and Path(result.markdown_report_path).exists():
-                with dl_cols[3]:
-                    st.download_button(
-                        "📝 Markdown Report",
-                        data=Path(result.markdown_report_path).read_bytes(),
-                        file_name="report.md",
-                        mime="text/markdown",
-                        use_container_width=True,
-                    )
+            with dl_cols[3]:
+                if is_pro_org(_current_org()):
+                    if getattr(result, "markdown_report_path", "") and Path(result.markdown_report_path).exists():
+                        st.download_button(
+                            "📝 Markdown Report",
+                            data=Path(result.markdown_report_path).read_bytes(),
+                            file_name="report.md",
+                            mime="text/markdown",
+                            use_container_width=True,
+                        )
+                else:
+                    st.button("🔒 Markdown (Pro)", disabled=True, use_container_width=True, key="md_lock")
+                    if st.button("Upgrade for MD", type="primary", use_container_width=True, key="md_upgrade_btn"):
+                        show_upgrade_modal()
 
-            if getattr(result, "excel_report_path", "") and Path(result.excel_report_path).exists():
-                with dl_cols[4]:
-                    st.download_button(
-                        "📗 Excel Report",
-                        data=Path(result.excel_report_path).read_bytes(),
-                        file_name="analysis_report.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        use_container_width=True,
-                    )
+            with dl_cols[4]:
+                if is_pro_org(_current_org()):
+                    if getattr(result, "excel_report_path", "") and Path(result.excel_report_path).exists():
+                        st.download_button(
+                            "📗 Excel Report",
+                            data=Path(result.excel_report_path).read_bytes(),
+                            file_name="analysis_report.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            use_container_width=True,
+                        )
+                else:
+                    st.button("🔒 Excel (Pro)", disabled=True, use_container_width=True, key="excel_lock")
+                    if st.button("Upgrade for Excel", type="primary", use_container_width=True, key="excel_upgrade_btn"):
+                        show_upgrade_modal()
 
             st.markdown("### 🔗 Share Report")
             share_disabled = result.status not in ("completed", "completed_with_warnings")
