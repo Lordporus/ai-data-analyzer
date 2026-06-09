@@ -59,11 +59,18 @@ def get_supabase_client() -> Optional[Client]:
     return _get_auth_client()
 
 
+def get_service_supabase_client() -> Optional[Client]:
+    """Public service-role client for server-side DB reads (e.g. profiles table).
+    Use this instead of get_supabase_client() when querying tables protected by
+    RLS, because the anon client has no user JWT and will be silently blocked."""
+    return _get_service_client()
+
+
 def _hash_password(password: str) -> str:
     return hashlib.sha256(password.encode()).hexdigest()
 
 
-def signup_user(email: str, password: str) -> Dict:
+def signup_user(email: str, password: str, full_name: str = "") -> Dict:
     """
     Signs up a new user using Supabase auth if credentials are set,
     otherwise falls back to local JSON database.
@@ -79,6 +86,20 @@ def signup_user(email: str, password: str) -> Dict:
         try:
             res = client.auth.sign_up({"email": email, "password": password})
             if res.user:
+                # Upsert profile with full_name
+                if full_name:
+                    try:
+                        # Use service client to bypass RLS for inserting if anon cannot
+                        service_client = _get_service_client()
+                        if service_client:
+                            service_client.table("profiles").upsert({
+                                "id": res.user.id,
+                                "full_name": full_name,
+                                "plan": "free"
+                            }).execute()
+                    except Exception as e:
+                        print(f"Failed to save profile on signup: {e}")
+                        
                 # Detect whether Supabase requires email confirmation.
                 # When confirmation is required, res.session is None and
                 # email_confirmed_at is None on the freshly created user.

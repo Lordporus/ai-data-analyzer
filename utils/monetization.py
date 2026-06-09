@@ -47,19 +47,21 @@ def get_month_window(now: datetime | None = None) -> tuple[str, str]:
     return start.isoformat(), end.isoformat()
 
 
-def count_monthly_analyses(org_id: str) -> int:
+def count_monthly_analyses(org_id: str, user_id: str = "") -> int:
     start, end = get_month_window()
     client = _get_service_client()
     if client:
         try:
-            res = (
+            query = (
                 client.table("analysis_runs")
                 .select("id", count="exact")
                 .eq("org_id", org_id)
                 .gte("created_at", start)
                 .lte("created_at", end)
-                .execute()
             )
+            if user_id:
+                query = query.eq("user_id", user_id)
+            res = query.execute()
             return int(getattr(res, "count", None) or len(res.data or []))
         except Exception as exc:
             print(f"Supabase analysis count error: {exc}. Using fallback.")
@@ -69,15 +71,17 @@ def count_monthly_analyses(org_id: str) -> int:
     for run in data.get("analysis_runs", []):
         if run.get("org_id") != org_id:
             continue
+        if user_id and run.get("user_id") != user_id:
+            continue
         created = run.get("created_at", "")
         if start <= _coerce_utc_iso(created) <= end:
             count += 1
     return count
 
 
-def can_run_analysis(org: dict | None) -> tuple[bool, str, int, int | None]:
+def can_run_analysis(org: dict | None, user_id: str = "") -> tuple[bool, str, int, int | None]:
     plan = org_plan(org)
-    used = count_monthly_analyses((org or {}).get("id", "default"))
+    used = count_monthly_analyses((org or {}).get("id", "default"), user_id=user_id)
     if plan == "pro":
         return True, "Pro plan: unlimited analyses.", used, None
     if used >= FREE_ANALYSIS_LIMIT:

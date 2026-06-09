@@ -1,5 +1,5 @@
 /* ── Typography ─────────────────────────── */
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=DM+Sans:wght@400;500;600;700&display=swap');
 
 html, body, [class*="css"] {
     font-family: 'Inter', sans-serif !important;
@@ -107,13 +107,229 @@ header {visibility: hidden;}
 
 /* ── Sidebar styling ─────────────────────── */
 [data-testid="stSidebar"] {
-    background: #0d0d1a !important;
-    border-right: 1px solid #1e1b3a !important;
+    background: linear-gradient(180deg, #0D0B14 0%, #110E1A 60%, #0A0812 100%) !important;
+    border-right: 1px solid rgba(139, 92, 246, 0.15) !important;
+}
+
+section[data-testid="stSidebar"] > div {
+    background: linear-gradient(180deg, #0D0B14 0%, #110E1A 60%, #0A0812 100%);
+    border-right: 1px solid rgba(139, 92, 246, 0.15);
+    padding: 0 !important;
 }
 
 [data-testid="stSidebar"] .stProgress > div > div {
     background: linear-gradient(90deg, #534AB7, #6c63d5) !important;
     border-radius: 4px !important;
+}
+
+/* ── Sidebar: User Card ───────────────────── */
+.user-card {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 20px 16px;
+    border-bottom: 1px solid rgba(139, 92, 246, 0.1);
+    margin-bottom: 8px;
+}
+
+.user-avatar {
+    width: 38px;
+    height: 38px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #8B5CF6, #6D28D9);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    font-size: 15px;
+    color: white;
+    flex-shrink: 0;
+    box-shadow: 0 0 0 2px rgba(139, 92, 246, 0.3);
+    font-family: 'DM Sans', sans-serif;
+}
+
+.user-info {
+    min-width: 0;
+    flex: 1;
+}
+
+.user-email {
+    font-size: 12px;
+    color: #A78BFA;
+    display: block;
+    margin-bottom: 4px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 160px;
+}
+
+.user-plan-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.plan-badge.free {
+    font-size: 10px;
+    font-weight: 600;
+    background: rgba(139, 92, 246, 0.15);
+    color: #C4B5FD;
+    border: 1px solid rgba(139, 92, 246, 0.3);
+    padding: 2px 8px;
+    border-radius: 20px;
+}
+
+.plan-badge.pro {
+    font-size: 10px;
+    font-weight: 600;
+    background: rgba(245, 158, 11, 0.15);
+    color: #FCD34D;
+    border: 1px solid rgba(245, 158, 11, 0.3);
+    padding: 2px 8px;
+    border-radius: 20px;
+}
+
+.upgrade-cta {
+    font-size: 10px;
+    font-weight: 600;
+    color: #F59E0B;
+    text-decoration: none;
+    margin-left: auto;
+    transition: color 0.2s ease;
+}
+
+.upgrade-cta:hover {
+    color: #FCD34D;
+}
+
+/* ── Sidebar: Usage Meter ─────────────────── */
+.usage-section {
+    padding: 0 16px 16px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.usage-label {
+    display: flex;
+    justify-content: space-between;
+    font-size: 11px;
+    color: #6B7280;
+    margin-bottom: 6px;
+}
+
+.usage-count {
+    color: #C4B5FD;
+    font-weight: 600;
+}
+
+.usage-bar {
+    height: 4px;
+    background: rgba(255, 255, 255, 0.08);
+    border-radius: 10px;
+    overflow: hidden;
+}
+
+.usage-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #8B5CF6, #A78BFA);
+    border-radius: 10px;
+    transition: width 0.5s ease;
+}
+
+.usage-hint {
+    font-size: 10px;
+    color: #4B5563;
+    margin-top: 4px;
+    display: block;
+}
+
+/* ── Sidebar Nav Buttons ─────────────────── */
+.sidebar-nav-start + div .stButton > button,
+.sidebar-nav-danger + div .stButton > button {
+    display: flex !important;
+    align-items: center !important;
+    justify-content: flex-start !important;
+    gap: 10px !important;
+    padding: 10px 12px !important;
+    border-radius: 8px !important;
+    text-decoration: none !important;
+    color: #9CA3AF !important;
+    font-size: 13px !important;
+    font-weight: 500 !important;
+    transition: all 0.2s ease !important;
+    border: none !important;
+    border-left: 2px solid transparent !important;
+    margin-bottom: 2px !important;
+    background: transparent !important;
+    box-shadow: none !important;
+}
+
+.sidebar-nav-start + div .stButton > button:hover {
+    background: rgba(139, 92, 246, 0.1) !important;
+    color: #E9D5FF !important;
+    border-left-color: #8B5CF6 !important;
+    transform: none !important;
+}
+
+.sidebar-nav-danger + div .stButton > button:hover {
+    background: rgba(239, 68, 68, 0.08) !important;
+    color: #FCA5A5 !important;
+    border-left-color: #EF4444 !important;
+    transform: none !important;
+}
+
+/* ── Sidebar: Recent Analyses Cards ────────── */
+.analysis-card {
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+    padding: 10px 12px;
+    border-radius: 8px;
+    margin: 4px 0;
+    cursor: pointer;
+    border: 1px solid transparent;
+    transition: all 0.2s ease;
+}
+
+.analysis-card:hover {
+    background: rgba(139, 92, 246, 0.08);
+    border-color: rgba(139, 92, 246, 0.2);
+}
+
+.analysis-icon {
+    font-size: 18px;
+    margin-top: 2px;
+    flex-shrink: 0;
+}
+
+.analysis-meta {
+    display: flex;
+    flex-direction: column;
+}
+
+.analysis-name {
+    font-size: 12px;
+    font-weight: 500;
+    color: #D1D5DB;
+    display: block;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 160px;
+}
+
+.analysis-date {
+    font-size: 10px;
+    color: #6B7280;
+    display: block;
+    margin-top: 2px;
+}
+
+.analysis-insights {
+    font-size: 10px;
+    color: #A78BFA;
+    display: block;
+    margin-top: 2px;
 }
 
 /* ── File uploader ───────────────────────── */
@@ -131,10 +347,23 @@ header {visibility: hidden;}
 }
 
 /* ── Expander / containers ───────────────── */
-[data-testid="stExpander"] {
-    background: #12121f !important;
-    border: 1px solid #1e1b3a !important;
+details[data-testid="stExpander"] {
+    background: rgba(255,255,255,0.02) !important;
+    border: 1px solid rgba(139, 92, 246, 0.1) !important;
     border-radius: 10px !important;
+    margin: 4px 8px !important;
+}
+details[data-testid="stExpander"] summary {
+    font-size: 12px !important;
+    font-weight: 600 !important;
+    color: #9CA3AF !important;
+    letter-spacing: 0.05em !important;
+    text-transform: uppercase !important;
+    padding: 10px 14px !important;
+}
+details[data-testid="stExpander"][open] {
+    border-color: rgba(139, 92, 246, 0.25) !important;
+    background: rgba(139, 92, 246, 0.04) !important;
 }
 
 /* ── Divider ─────────────────────────────── */

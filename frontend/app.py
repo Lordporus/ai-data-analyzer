@@ -30,7 +30,7 @@ import extra_streamlit_components as stx
 from config.settings import API_INTERNAL_URL, BRAND_NAME, BRAND_COLOR, OUTPUT_DIR, UPLOAD_DIR, is_llm_enabled, SCHEDULER_ENABLED
 from orchestrator.master import MasterOrchestrator, PipelineResult
 from agents.data_quality import score_color, risk_level
-from utils.auth import login_user, signup_user, save_session_token, load_session_token, delete_session_token, get_supabase_client
+from utils.auth import login_user, signup_user, save_session_token, load_session_token, delete_session_token, get_supabase_client, get_service_supabase_client
 from utils.workspace import create_organization, get_organizations, add_analysis_run, get_org_analysis_history
 from utils.storage import upload_to_r2, LOCAL_STORAGE_DIR
 from utils.share_reports import create_share_link, revoke_share_link
@@ -179,7 +179,7 @@ def show_profile_modal():
     if plan == "pro":
         st.link_button("Manage Billing", billing_portal_url(), use_container_width=True)
     else:
-        if st.button("Upgrade to Pro — $19/month", type="primary", use_container_width=True, key="profile_upgrade_btn"):
+        if st.button("Upgrade to Pro — $5/month", type="primary", use_container_width=True, key="profile_upgrade_btn"):
             _start_razorpay_checkout()
     st.caption("Email and password changes are handled by Supabase Auth.")
 
@@ -210,7 +210,7 @@ def show_upgrade_modal():
         st.markdown(
             '<p><s style="color:#888;">$49</s> '
             '<strong style="color:#a89fe8; '
-            'font-size:1.3rem;">$19 / month</strong></p>',
+            'font-size:1.3rem;">$5 / month</strong></p>',
             unsafe_allow_html=True
         )
         st.markdown("""
@@ -227,7 +227,7 @@ def show_upgrade_modal():
     st.caption("🚀 1,200+ founders already on Pro · "
                "Cancel anytime · No hidden fees")
 
-    if st.button("Start Pro — $19/month",
+    if st.button("Start Pro — $5/month",
                  type="primary",
                  use_container_width=True):
         _start_razorpay_checkout()
@@ -392,6 +392,19 @@ if "user" not in st.session_state:
         if _restored_user:
             st.session_state["user"] = _restored_user
             st.session_state["_session_token"] = _saved_token
+            
+            # Fetch profile name — must use service client to bypass RLS
+            # (anon client has no user JWT so auth.uid() is null → query blocked)
+            _profile_client = get_service_supabase_client()
+            if _profile_client:
+                try:
+                    profile_res = _profile_client.table("profiles").select("full_name, plan").eq("id", _restored_user["id"]).single().execute()
+                    st.session_state["display_name"] = (profile_res.data or {}).get("full_name") or _restored_user.get("email")
+                    st.session_state["user_plan"] = (profile_res.data or {}).get("plan", "free")
+                except Exception:
+                    st.session_state["display_name"] = _restored_user.get("email")
+            else:
+                st.session_state["display_name"] = _restored_user.get("email")
 
 if st.query_params.get("upgrade") == "success" and not st.session_state.get("_upgrade_success_seen"):
     st.session_state["_upgrade_success_seen"] = True
@@ -435,6 +448,18 @@ if "user" not in st.session_state:
                     user = login_user(login_email, login_pass)
                     st.session_state["user"] = user
                     
+                    # Fetch profile name — must use service client to bypass RLS
+                    _profile_client = get_service_supabase_client()
+                    if _profile_client:
+                        try:
+                            profile_res = _profile_client.table("profiles").select("full_name, plan").eq("id", user["id"]).single().execute()
+                            st.session_state["display_name"] = (profile_res.data or {}).get("full_name") or login_email
+                            st.session_state["user_plan"] = (profile_res.data or {}).get("plan", "free")
+                        except Exception:
+                            st.session_state["display_name"] = login_email
+                    else:
+                        st.session_state["display_name"] = login_email
+                    
                     if user.get("type") == "supabase" and user.get("access_token") and user.get("refresh_token"):
                         _token = f"{user['access_token']}:::{user['refresh_token']}"
                         st.session_state["_session_token"] = _token
@@ -461,16 +486,21 @@ if "user" not in st.session_state:
                     st.rerun()
                     
         with auth_mode[1]:
+            signup_name = st.text_input("Full Name", placeholder="Your full name", key="signup_name_input")
             signup_email = st.text_input("Email Address", key="signup_email_input")
             signup_pass = st.text_input("Password", type="password", key="signup_pass_input")
             signup_pass_conf = st.text_input("Confirm Password", type="password", key="signup_pass_conf")
             if st.button("📝 Sign Up Now", type="primary", use_container_width=True):
-                if signup_pass != signup_pass_conf:
+                if not signup_name.strip():
+                    st.error("❌ Please enter your full name.")
+                elif signup_pass != signup_pass_conf:
                     st.error("❌ Passwords do not match.")
+                elif len(signup_pass) < 6:
+                    st.error("❌ Password must be at least 6 characters.")
                 else:
                     _signup_ok = False
                     try:
-                        user = signup_user(signup_email, signup_pass)
+                        user = signup_user(signup_email, signup_pass, signup_name.strip())
 
                         # ── Email verification enforcement ────────────────────
                         # When Supabase "Confirm email" is enabled, signup_user
@@ -490,6 +520,7 @@ if "user" not in st.session_state:
                         else:
                             # Email confirmation is disabled (dev/local) — auto-login.
                             st.session_state["user"] = user
+                            st.session_state["display_name"] = signup_name.strip() or signup_email
 
                             if user.get("type") == "supabase" and user.get("access_token") and user.get("refresh_token"):
                                 _token = f"{user['access_token']}:::{user['refresh_token']}"
@@ -539,14 +570,53 @@ with st.sidebar:
     
     # ── User Account Info & Logout ────────────────────────────────────
     user_info = st.session_state.get("user", {})
-    st.markdown(f"👤 **{user_info.get('email', 'User')}**")
+    _user_email = user_info.get('email', 'User')
+    _display_name = st.session_state.get("display_name", _user_email)
+    _avatar_letter = _display_name[0].upper() if _display_name and _display_name != 'User' else 'U'
     _sidebar_plan = _current_plan()
+
     if _sidebar_plan == "pro":
-        st.success("⚡ Pro Plan")
+        _plan_badge_html = '<span class="plan-badge pro">⚡ Pro Plan</span>'
     else:
-        st.warning("Free Plan")
+        _plan_badge_html = '<span class="plan-badge free">Free Plan</span>'
+
+    st.markdown(f"""
+    <div class="user-card">
+        <div class="user-avatar">{_avatar_letter}</div>
+        <div class="user-info">
+            <span class="user-email">{_display_name}</span>
+            <div class="user-plan-row">
+                {_plan_badge_html}
+            </div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    if _sidebar_plan != "pro":
+        if st.button("🚀 Upgrade to Pro →", type="primary", use_container_width=True, key="user_card_upgrade"):
+            show_upgrade_modal()
+
+    # ── Usage Meter (Free plan only) ─────────────────────────────
+    if _sidebar_plan != "pro":
+        _org_id = _current_org().get("id", "default")
+        _current_user_id = st.session_state.get("user", {}).get("id", "")
+        _used = count_monthly_analyses(_org_id, user_id=_current_user_id)
+        _limit = FREE_ANALYSIS_LIMIT
+        _remaining = max(_limit - _used, 0)
+        _pct = min(int((_used / _limit) * 100), 100) if _limit > 0 else 0
+        st.markdown(f"""
+        <div class="usage-section">
+            <div class="usage-bar">
+                <div class="usage-fill" style="width: {_pct}%"></div>
+            </div>
+            <span class="usage-hint">{_remaining} remaining this month</span>
+        </div>
+        """, unsafe_allow_html=True)
+
+    st.markdown('<div class="sidebar-nav-start"></div>', unsafe_allow_html=True)
     if st.button("👤 Account Settings", use_container_width=True):
         show_profile_modal()
+    st.markdown('<div class="sidebar-nav-danger"></div>', unsafe_allow_html=True)
     if st.button("🚪 Log Out", type="secondary", use_container_width=True):
         # Revoke persistent session token (BUG 2 fix)
         _logout_token = st.session_state.get("_session_token", "") or _cookie_manager.get("session_token") or ""
@@ -640,10 +710,13 @@ with st.sidebar:
                 with st.container():
                     st.markdown(
                         f"""
-                        <div style='background-color: #161b22; border: 1px solid #30363d; padding: 10px; border-radius: 6px; margin-bottom: 8px;'>
-                            <strong style='color: #a78bfa;'>📊 {run['dataset']}</strong><br/>
-                            <span style='font-size: 0.8rem; color: #8b949e;'>🕐 {run['timestamp']}</span><br/>
-                            <span style='font-size: 0.8rem; color: #8b949e;'>💡 {run['insights_count']} insights found</span>
+                        <div class="analysis-card">
+                            <div class="analysis-icon">📊</div>
+                            <div class="analysis-meta">
+                                <span class="analysis-name">{run['dataset']}</span>
+                                <span class="analysis-date">{run['timestamp']}</span>
+                                <span class="analysis-insights">⭐ {run['insights_count']} insights found</span>
+                            </div>
                         </div>
                         """, 
                         unsafe_allow_html=True
@@ -830,48 +903,6 @@ st.markdown(f"""
 </section>
 """, unsafe_allow_html=True)
 
-with st.sidebar:
-    # Brand
-    st.markdown("### 📊 AI Data Analyzer")
-    st.divider()
-    
-    _active_org_for_usage = _current_org()
-    _plan_for_usage = _current_plan()
-    _used = count_monthly_analyses(_active_org_for_usage.get("id", "default"))
-    if _plan_for_usage == "pro":
-        st.success("⚡ Pro Plan: unlimited analyses")
-        st.caption(f"{_used} analyses run this month")
-    else:
-        st.markdown(f"**Free Analyses:** {_used}/{FREE_ANALYSIS_LIMIT} used")
-        st.progress(min(_used / FREE_ANALYSIS_LIMIT, 1.0))
-    
-    st.divider()
-    
-    # Locked insights (always visible as FOMO)
-    st.markdown("**✨ AI Insights**")
-    st.success("✅ Data quality score: 94%")
-    st.success("✅ Top trend identified")
-    if _plan_for_usage == "pro":
-        st.success("✅ Revenue anomaly detection unlocked")
-        st.success("✅ Forecast lab unlocked")
-    else:
-        st.info("🔒 Revenue anomaly detected — Pro")
-        st.info("🔒 Churn risk segment — Pro")
-        st.info("🔒 Forecast accuracy report — Pro")
-    
-    st.divider()
-    
-    # Upgrade CTA
-    if _plan_for_usage == "pro":
-        if st.button("👤 Manage Account", use_container_width=True):
-            show_profile_modal()
-    elif st.button("⚡ Upgrade to Pro — $19/mo",
-                   use_container_width=True,
-                   type="primary"):
-        show_upgrade_modal()
-
-    st.caption("🚀 1,200+ founders already upgraded")
-    st.caption("Cancel anytime · No credit card to start")
 
 # Sticky bottom upgrade banner
 if _current_plan() != "pro" and not st.session_state.get("banner_dismissed", False):
@@ -882,7 +913,7 @@ if _current_plan() != "pro" and not st.session_state.get("banner_dismissed", Fal
         "Pro users get 10x deeper analysis + "
         "unlimited CSV uploads."
     )
-    if _b2.button("Upgrade Now — $19/mo",
+    if _b2.button("Upgrade Now — $5/mo",
                   type="primary",
                   key="bottom_upgrade_btn"):
         show_upgrade_modal()
@@ -1166,7 +1197,8 @@ with tab_upload:
         
         if run_clicked or "celery_task_id" in st.session_state:
             if run_clicked and not st.session_state.get("demo_mode"):
-                run_allowed, run_msg, _, _ = can_run_analysis(_current_org())
+                _cur_user_id = st.session_state.get("user", {}).get("id", "")
+                run_allowed, run_msg, _, _ = can_run_analysis(_current_org(), user_id=_cur_user_id)
                 if not run_allowed:
                     st.error(run_msg)
                     if st.button("⚡ Upgrade to Pro for unlimited analyses", type="primary", use_container_width=True, key="analysis_limit_upgrade_btn"):
