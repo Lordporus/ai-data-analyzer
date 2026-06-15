@@ -24,7 +24,7 @@ import pandas as pd
 import plotly.graph_objects as go
 from datetime import datetime
 import requests
-import pickle
+from utils.secure_serialize import load_pipeline_result, loads_pipeline_result, dump_pipeline_result
 import extra_streamlit_components as stx
 
 from config.settings import API_INTERNAL_URL, BRAND_NAME, BRAND_COLOR, OUTPUT_DIR, UPLOAD_DIR, is_llm_enabled, SCHEDULER_ENABLED
@@ -56,14 +56,13 @@ def load_analysis_result_from_storage(output_path: str):
     if output_path.startswith("http://") or output_path.startswith("https://"):
         res = requests.get(output_path)
         res.raise_for_status()
-        return pickle.loads(res.content)
+        return loads_pipeline_result(res.content)
     else:
         # Local storage fallback
         filename = output_path.split("/")[-1]
         local_path = LOCAL_STORAGE_DIR / filename
         if local_path.exists():
-            with open(local_path, "rb") as f:
-                return pickle.load(f)
+            return load_pipeline_result(str(local_path))
         else:
             raise FileNotFoundError(f"Local persistent analysis file not found: {local_path}")
 
@@ -224,7 +223,7 @@ def show_upgrade_modal():
         """)
 
     st.divider()
-    st.caption("🚀 1,200+ founders already on Pro · "
+    st.caption("🚀 Start your analysis today · "
                "Cancel anytime · No hidden fees")
 
     if st.button("Start Pro — $5/month",
@@ -284,12 +283,8 @@ def show_landing_page():
     with col3:
         st.info("📄 **PDF Report**\nDownload a branded executive report instantly")
 
-    # Social proof
+    # Example Dashboard
     st.markdown("---")
-    st.markdown(
-        "<div class='landing-proof'>✨ <strong>Used by 500+ analysts, consultants, and business owners</strong></div>",
-        unsafe_allow_html=True,
-    )
 
     st.markdown("### See real output before signup")
     proof_cols = st.columns(3)
@@ -409,7 +404,7 @@ if "user" not in st.session_state:
 if st.query_params.get("upgrade") == "success" and not st.session_state.get("_upgrade_success_seen"):
     st.session_state["_upgrade_success_seen"] = True
     try:
-        refreshed_orgs = get_organizations()
+        refreshed_orgs = get_organizations(st.session_state.get("user", {}).get("id"))
         st.session_state["orgs"] = refreshed_orgs
         paid_org_id = st.query_params.get("org_id", "")
         for org in refreshed_orgs:
@@ -553,7 +548,7 @@ if st.session_state.get("demo_mode"):
     st.session_state["active_org"] = {"id": "demo", "name": "Demo Workspace"}
 elif "active_org" not in st.session_state:
     if "orgs" not in st.session_state:
-        st.session_state["orgs"] = get_organizations()
+        st.session_state["orgs"] = get_organizations(st.session_state.get("user", {}).get("id"))
     orgs = st.session_state["orgs"]
     if orgs:
         st.session_state["active_org"] = orgs[0]
@@ -652,7 +647,7 @@ with st.sidebar:
       with st.expander("🏢 Team Workspace", expanded=False):
         # ── Workspace Switcher & Creator ─────────────────────────────────
         if "orgs" not in st.session_state:
-            st.session_state["orgs"] = get_organizations()
+            st.session_state["orgs"] = get_organizations(st.session_state.get("user", {}).get("id"))
         orgs = st.session_state["orgs"]
         org_names = [org["name"] for org in orgs]
         current_idx = 0
@@ -925,7 +920,7 @@ if _current_plan() != "pro" and not st.session_state.get("banner_dismissed", Fal
 tab_upload, tab_compare, tab_stream = st.tabs([
     "📤 Single File Analysis", 
     "🔀 Multi-File Comparison", 
-    "📡 Live Stream Analysis"
+    "📡 Google Sheets Data"
 ])
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1240,7 +1235,7 @@ with tab_upload:
                 }
 
                 # ── Auto-detect Redis and choose Celery vs synchronous execution ──
-                import pickle
+                from utils.secure_serialize import load_pipeline_result, loads_pipeline_result, dump_pipeline_result
                 import uuid as _uuid
                 from utils.task_queue import is_redis_available, run_analysis_sync
 
@@ -1308,8 +1303,7 @@ with tab_upload:
 
                             pickle_path = result_dict.get("pickle_path")
                             if pickle_path and Path(pickle_path).exists():
-                                with open(pickle_path, "rb") as f:
-                                    result = pickle.load(f)
+                                result = load_pipeline_result(str(pickle_path))
                             else:
                                 del st.session_state["celery_task_id"]
                                 raise Exception("Pipeline completed but results are missing from disk.")
@@ -1347,8 +1341,7 @@ with tab_upload:
 
                         pickle_path = result_dict.get("pickle_path")
                         if pickle_path and Path(pickle_path).exists():
-                            with open(pickle_path, "rb") as f:
-                                result = pickle.load(f)
+                            result = load_pipeline_result(str(pickle_path))
                         else:
                             raise Exception("Pipeline completed but results are missing from disk.")
 
@@ -1361,7 +1354,7 @@ with tab_upload:
 
                         # ── Persist analysis run in workspace ──────────────────────
                         run_id = result.job_id or str(_uuid.uuid4())
-                        storage_key = f"{run_id}_pipeline_result.pkl"
+                        storage_key = f"{run_id}_pipeline_result.json"
                         dataset_name = uploaded_file.name if uploaded_file else temp_path.name
                         try:
                             from utils.storage import upload_to_r2
@@ -1788,7 +1781,7 @@ with tab_stream:
             st.success(f"✅ Loaded {len(_sheet_df)} rows from Google Sheets.")
 
             import uuid as _uuid_gs
-            import pickle as _pickle_gs
+            from utils.secure_serialize import load_pipeline_result, loads_pipeline_result, dump_pipeline_result as _pickle_gs
 
             _gs_temp_path = OUTPUT_DIR / "_temp" / f"gsheet_{_uuid_gs.uuid4().hex[:8]}.csv"
             _gs_temp_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1824,13 +1817,12 @@ with tab_stream:
 
                     # Persist run in workspace
                     _gs_job_id = _gs_result.job_id or f"gsheet_{int(time.time())}"
-                    _gs_pickle_path = _gs_output_dir / f"{_gs_job_id}_pipeline_result.pkl"
-                    with open(_gs_pickle_path, "wb") as _f:
-                        _pickle_gs.dump(_gs_result, _f)
+                    _gs_pickle_path = _gs_output_dir / f"{_gs_job_id}_pipeline_result.json"
+                    dump_pipeline_result(_gs_result, str(_gs_pickle_path))
                     try:
                         from utils.storage import upload_to_r2
                         from utils.workspace import add_analysis_run
-                        _gs_public_url = upload_to_r2(str(_gs_pickle_path), f"{_gs_job_id}_pipeline_result.pkl")
+                        _gs_public_url = upload_to_r2(str(_gs_pickle_path), f"{_gs_job_id}_pipeline_result.json")
                         _gs_active_org = st.session_state.get("active_org", {"id": "default"})
                         _gs_user_info = st.session_state.get("user", {"id": "anonymous"})
                         add_analysis_run(

@@ -187,14 +187,13 @@ class MasterOrchestrator:
             )
 
             # ── 7) Save cleaned CSV ──────────────────────────────────
-            if is_pro:
-                try:
-                    cleaned_path = output_dir / "cleaned_data.csv"
-                    repair_result.dataframe.to_csv(cleaned_path, index=False)
-                    result.cleaned_csv_path = str(cleaned_path)
-                except Exception as exc:
-                    result.errors.append(f"CSV save failed: {exc}")
-                    logger.warning("Could not save cleaned CSV: %s", exc)
+            try:
+                cleaned_path = output_dir / "cleaned_data.csv"
+                repair_result.dataframe.to_csv(cleaned_path, index=False)
+                result.cleaned_csv_path = str(cleaned_path)
+            except Exception as exc:
+                result.errors.append(f"CSV save failed: {exc}")
+                logger.warning("Could not save cleaned CSV: %s", exc)
 
             # ── 8) Dashboard [NON-CRITICAL] ──────────────────────────
             if is_pro:

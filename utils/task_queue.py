@@ -1,5 +1,5 @@
 import os
-import pickle
+from utils.secure_serialize import dump_pipeline_result
 import logging
 from pathlib import Path
 from orchestrator.master import MasterOrchestrator
@@ -66,10 +66,9 @@ def run_analysis_sync(
             is_pro=is_pro,
         )
 
-        # Persist the result as a pickle file (same convention as Celery path)
-        pickle_path = output_dir / "pipeline_result.pkl"
-        with open(pickle_path, "wb") as f:
-            pickle.dump(result, f)
+        # Persist the result as a JSON file
+        pickle_path = output_dir / "pipeline_result.json"
+        dump_pipeline_result(result, pickle_path)
 
         return {
             "status": result.status,
@@ -136,9 +135,8 @@ try:
                 is_pro=is_pro,
             )
 
-            pickle_path = output_dir / "pipeline_result.pkl"
-            with open(pickle_path, "wb") as f:
-                pickle.dump(result, f)
+            pickle_path = output_dir / "pipeline_result.json"
+            dump_pipeline_result(result, pickle_path)
 
             return {
                 "status": result.status,

@@ -49,7 +49,7 @@ async def enterprise_analyze(
     upload_path.write_bytes(content)
 
     orchestrator = MasterOrchestrator()
-    result = orchestrator.run(upload_path, job_dir)
+    result = orchestrator.run(upload_path, job_dir, is_pro=True)
 
     # ── Return structured JSON ───────────────────────────────────────
     summary = result.summary_dict()

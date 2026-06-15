@@ -29,7 +29,7 @@ def _save_local_data(data: Dict):
         json.dump(data, f, indent=4)
 
 
-def create_organization(name: str) -> Dict:
+def create_organization(name: str, user_id: str = None) -> Dict:
     """
     Creates a new team organization. Uses Supabase (service role) if available,
     otherwise falls back to local JSON database.
@@ -47,6 +47,13 @@ def create_organization(name: str) -> Dict:
                 "plan": "free",
             }).execute()
             if res.data:
+                # Add user to org_members if user_id provided
+                if user_id:
+                    client.table("org_members").insert({
+                        "org_id": org_id,
+                        "user_id": user_id,
+                        "role": "owner"
+                    }).execute()
                 return res.data[0]
         except Exception as e:
             print(f"Supabase Org Create Error: {e}. Using fallback.")
@@ -55,30 +62,51 @@ def create_organization(name: str) -> Dict:
     data = _load_local_data()
     org = {"id": org_id, "name": name, "created_at": created_at, "plan": "free"}
     data["organizations"][org_id] = org
+    if "org_members" not in data:
+        data["org_members"] = []
+    if user_id:
+        data["org_members"].append({"org_id": org_id, "user_id": user_id, "role": "owner"})
     _save_local_data(data)
     return org
 
 
-def get_organizations() -> List[Dict]:
+def get_organizations(user_id: str = None) -> List[Dict]:
     """
-    Fetches all available team organizations via service role client.
+    Fetches all available team organizations for a user via service role client.
     """
     client = _get_service_client()
-    if client:
+    if client and user_id:
+        try:
+            # First get org_ids for the user
+            memberships = client.table("org_members").select("org_id").eq("user_id", user_id).execute()
+            if memberships.data:
+                org_ids = [m["org_id"] for m in memberships.data]
+                res = client.table("organizations").select("*").in_("id", org_ids).execute()
+                if res.data:
+                    return res.data
+            return []
+        except Exception as e:
+            print(f"Supabase Org Fetch Error: {e}. Using fallback.")
+    elif client:
+        # Fallback for when no user_id is provided (admin use cases)
         try:
             res = client.table("organizations").select("*").execute()
             if res.data:
                 return res.data
-        except Exception as e:
-            print(f"Supabase Org Fetch Error: {e}. Using fallback.")
+        except Exception:
+            pass
 
     # Fallback Local Storage
     data = _load_local_data()
     orgs = list(data["organizations"].values())
+    if user_id and "org_members" in data:
+        user_org_ids = {m["org_id"] for m in data["org_members"] if m["user_id"] == user_id}
+        orgs = [o for o in orgs if o["id"] in user_org_ids]
+    
     for org in orgs:
         org.setdefault("plan", "free")
-    if not orgs:
-        default_org = create_organization("Default Team Workspace")
+    if not orgs and user_id:
+        default_org = create_organization("Default Team Workspace", user_id)
         return [default_org]
     return orgs
 

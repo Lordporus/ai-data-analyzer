@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import html
 import json
-import pickle
 import secrets
 import sys
 import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
+
+from utils.secure_serialize import dump_pipeline_result, load_pipeline_result
 
 # Ensure project root is on sys.path regardless of who imports this module
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -38,9 +39,10 @@ def create_share_link(result: Any, owner_user_id: str, dataset_name: str, plan: 
     now = datetime.utcnow()
     expires_at = now + timedelta(days=PLAN_EXPIRY_DAYS.get(plan, 7))
 
-    snapshot_path = SHARED_RESULTS_DIR / f"{token}.pkl"
-    with snapshot_path.open("wb") as f:
-        pickle.dump(result, f)
+    snapshot_dir = SHARED_RESULTS_DIR / token
+    snapshot_dir.mkdir(parents=True, exist_ok=True)
+    snapshot_path = snapshot_dir / "pipeline_result.json"
+    dump_pipeline_result(result, snapshot_path)
 
     record = {
         "id": share_id,
@@ -84,14 +86,13 @@ def get_shared_report(token: str) -> tuple[dict, Any]:
         if _parse_dt(record.get("expires_at")) <= datetime.utcnow():
             raise ValueError("This report link has expired.")
 
-        result_path = Path(record.get("result_path", ""))
-        if not result_path.exists():
+        snapshot_path = Path(record.get("result_path", ""))
+        if not snapshot_path.exists():
             raise FileNotFoundError("The shared report snapshot is missing.")
 
         record["view_count"] = int(record.get("view_count", 0)) + 1
         _save_records(data)
-        with result_path.open("rb") as f:
-            return record, pickle.load(f)
+        return record, load_pipeline_result(snapshot_path)
 
     raise FileNotFoundError("Shared report not found.")
 

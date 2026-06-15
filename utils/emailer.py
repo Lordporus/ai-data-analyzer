@@ -21,7 +21,7 @@ def send_report_email(to_email, pdf_path, dataset_name):
         encoded = base64.b64encode(f.read()).decode()
         
     message = Mail(
-        from_email='reports@yourdomain.com',
+        from_email=settings.SENDGRID_FROM_EMAIL or 'reports@yourdomain.com',
         to_emails=to_email,
         subject=f'Your Scheduled Analysis Report — {dataset_name}',
         html_content=f'<p>Your scheduled analysis for <b>{dataset_name}</b> is attached.</p>'

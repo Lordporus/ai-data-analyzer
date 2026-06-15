@@ -8,13 +8,14 @@ from __future__ import annotations
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, Cookie, File, Header, HTTPException, UploadFile
+from fastapi import APIRouter, Cookie, File, Header, HTTPException, UploadFile, Depends
 
 from config.settings import MAX_FILE_SIZE_BYTES, OUTPUT_DIR, UPLOAD_DIR
 from utils.auth import load_session_token
 from utils.monetization import FREE_FILE_SIZE_BYTES, can_run_analysis, is_pro_org
 from utils.task_queue import run_analysis_task
 from utils.workspace import get_organizations
+from utils.rate_limit import rate_limit_dependency
 
 router = APIRouter()
 
@@ -26,7 +27,7 @@ def _resolve_user_org(user_id: str) -> dict | None:
     back to None (which means free-tier limits apply).
     """
     from utils.workspace import get_org_analysis_history
-    orgs = get_organizations()
+    orgs = get_organizations(user_id)
     if not orgs:
         return None
     # Check each org for runs belonging to this user
@@ -40,7 +41,7 @@ def _resolve_user_org(user_id: str) -> dict | None:
     return None
 
 
-@router.post("/upload")
+@router.post("/upload", dependencies=[Depends(rate_limit_dependency)])
 async def upload_and_analyze(
     file: UploadFile = File(...),
     session_token: str | None = Cookie(default=None),

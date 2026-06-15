@@ -56,6 +56,7 @@ DEFAULT_BRAND = {
 
 # ── Scheduled Email Reports ──────────────────────────────────────────────
 SENDGRID_API_KEY = os.getenv("SENDGRID_API_KEY", "")
+SENDGRID_FROM_EMAIL = os.getenv("SENDGRID_FROM_EMAIL", "")
 SCHEDULER_ENABLED = os.getenv("SCHEDULER_ENABLED", "false").lower() == "true"
 
 # ── Auth ─────────────────────────────────────────────────────────────────

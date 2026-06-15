@@ -18,7 +18,7 @@ from api.routes.enterprise import router as enterprise_router
 from api.routes.status import router as status_router
 from api.routes.share import router as share_router
 from api.routes.razorpay_billing import router as razorpay_billing_router
-from config.settings import BRAND_NAME, OUTPUT_DIR, is_llm_enabled
+from config.settings import BRAND_NAME, OUTPUT_DIR, is_llm_enabled, APP_BASE_URL
 
 # ── Logging ──────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -42,9 +42,18 @@ app = FastAPI(
 )
 
 # ── CORS ─────────────────────────────────────────────────────────────
+origins = [
+    "http://localhost",
+    "http://localhost:8000",
+    "http://localhost:3000",
+    "http://localhost:8501",
+]
+if APP_BASE_URL:
+    origins.append(APP_BASE_URL.rstrip("/"))
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

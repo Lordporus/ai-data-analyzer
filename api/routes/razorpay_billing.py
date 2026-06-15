@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Header, HTTPException, Request
+from fastapi import APIRouter, Header, HTTPException, Request, Depends
 from pydantic import BaseModel
 
 from utils.monetization import (
@@ -8,6 +8,7 @@ from utils.monetization import (
     create_razorpay_subscription,
     verify_razorpay_signature,
 )
+from utils.rate_limit import rate_limit_dependency
 
 router = APIRouter()
 
@@ -18,7 +19,7 @@ class CheckoutRequest(BaseModel):
     user_email: str
 
 
-@router.post("/checkout/razorpay")
+@router.post("/checkout/razorpay", dependencies=[Depends(rate_limit_dependency)])
 async def create_checkout(req: CheckoutRequest):
     """Create a hosted Razorpay subscription checkout link for an organization."""
     try:
@@ -33,7 +34,7 @@ async def create_checkout(req: CheckoutRequest):
         raise HTTPException(status_code=500, detail=f"Checkout creation failed: {exc}")
 
 
-@router.post("/webhooks/razorpay")
+@router.post("/webhooks/razorpay", dependencies=[Depends(rate_limit_dependency)])
 async def razorpay_webhook(
     request: Request,
     x_razorpay_signature: str = Header(default=""),
