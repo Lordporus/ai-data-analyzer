@@ -28,6 +28,15 @@ create table if not exists public.session_store (
     expiry     timestamptz
 );
 
+-- ── 4. profiles ─────────────────────────────────────────────
+create table if not exists public.profiles (
+    id          uuid primary key references auth.users(id) on delete cascade,
+    full_name   text,
+    plan        text not null default 'free',
+    created_at  timestamptz not null default now(),
+    updated_at  timestamptz not null default now()
+);
+
 -- ── Indexes for common queries ───────────────────────────────
 create index if not exists idx_analysis_runs_org_id
     on public.analysis_runs(org_id);
@@ -43,6 +52,7 @@ create index if not exists idx_session_store_expiry
 alter table public.organizations  enable row level security;
 alter table public.analysis_runs  enable row level security;
 alter table public.session_store  enable row level security;
+alter table public.profiles       enable row level security;
 
 -- Service role bypass (used by backend with SUPABASE_SERVICE_KEY)
 -- This allows all operations from the server side.
@@ -50,18 +60,34 @@ alter table public.session_store  enable row level security;
 drop policy if exists "service_role_all_orgs"    on public.organizations;
 drop policy if exists "service_role_all_runs"    on public.analysis_runs;
 drop policy if exists "service_role_all_sessions" on public.session_store;
+drop policy if exists "service_role_all_profiles" on public.profiles;
 
 create policy "service_role_all_orgs"
     on public.organizations for all
+    to service_role
     using (true)
     with check (true);
 
 create policy "service_role_all_runs"
     on public.analysis_runs for all
+    to service_role
     using (true)
     with check (true);
 
 create policy "service_role_all_sessions"
     on public.session_store for all
+    to service_role
     using (true)
     with check (true);
+
+create policy "service_role_all_profiles"
+    on public.profiles for all
+    to service_role
+    using (true)
+    with check (true);
+
+revoke all on public.session_store from anon, authenticated;
+grant all on public.organizations to service_role;
+grant all on public.analysis_runs to service_role;
+grant all on public.session_store to service_role;
+grant all on public.profiles to service_role;

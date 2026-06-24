@@ -4,6 +4,7 @@ import calendar
 import hashlib
 import hmac
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -21,10 +22,25 @@ from config.settings import (
 from utils.auth import _get_service_client
 from utils.workspace import _load_local_data, _save_local_data
 
-FREE_ANALYSIS_LIMIT = 5
-FREE_FILE_SIZE_BYTES = 10 * 1024 * 1024
-PRO_FILE_SIZE_BYTES = 50 * 1024 * 1024
-FREE_NL_QUERY_DAILY_LIMIT = 3
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, str(default)))
+    except ValueError:
+        return default
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+BETA_FULL_ACCESS = _env_bool("BETA_FULL_ACCESS", True)
+FREE_ANALYSIS_LIMIT = _env_int("FREE_ANALYSIS_LIMIT", 5)
+FREE_FILE_SIZE_BYTES = _env_int("FREE_FILE_SIZE_MB", 10) * 1024 * 1024
+PRO_FILE_SIZE_BYTES = _env_int("PRO_FILE_SIZE_MB", 50) * 1024 * 1024
+FREE_NL_QUERY_DAILY_LIMIT = _env_int("FREE_NL_QUERY_DAILY_LIMIT", 3)
 
 
 def normalize_plan(plan: str | None) -> str:
@@ -35,8 +51,21 @@ def org_plan(org: dict | None) -> str:
     return normalize_plan((org or {}).get("plan"))
 
 
-def is_pro_org(org: dict | None) -> bool:
+def is_beta_full_access() -> bool:
+    return BETA_FULL_ACCESS
+
+
+def is_paid_pro_org(org: dict | None) -> bool:
     return org_plan(org) == "pro"
+
+
+def is_pro_org(org: dict | None) -> bool:
+    """Feature-access check.
+
+    During beta, free workspaces receive the same feature access as Pro while
+    their persisted billing plan remains unchanged for future monetization.
+    """
+    return is_beta_full_access() or is_paid_pro_org(org)
 
 
 def get_month_window(now: datetime | None = None) -> tuple[str, str]:
@@ -82,6 +111,8 @@ def count_monthly_analyses(org_id: str, user_id: str = "") -> int:
 def can_run_analysis(org: dict | None, user_id: str = "") -> tuple[bool, str, int, int | None]:
     plan = org_plan(org)
     used = count_monthly_analyses((org or {}).get("id", "default"), user_id=user_id)
+    if is_beta_full_access():
+        return True, "Beta mode: unlimited analyses enabled. Usage is still tracked.", used, None
     if plan == "pro":
         return True, "Pro plan: unlimited analyses.", used, None
     if used >= FREE_ANALYSIS_LIMIT:
@@ -99,6 +130,8 @@ def can_upload_file(org: dict | None, size_bytes: int) -> tuple[bool, str]:
     if size_bytes <= limit:
         return True, ""
     limit_mb = limit // (1024 * 1024)
+    if is_beta_full_access():
+        return False, f"File exceeds the {limit_mb}MB beta upload limit. Please use a smaller file for now."
     return False, f"File exceeds the {limit_mb}MB {'Pro' if is_pro_org(org) else 'free'} limit. Upgrade to Pro to upload up to 50MB."
 
 

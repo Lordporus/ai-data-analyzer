@@ -1,14 +1,15 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from fastapi.responses import HTMLResponse
 
 from utils.share_reports import get_shared_report, render_shared_report_html
+from utils.rate_limit import rate_limiter
 
 router = APIRouter()
 
 
-@router.get("/report/{share_token}", response_class=HTMLResponse)
+@router.get("/report/{share_token}", response_class=HTMLResponse, dependencies=[Depends(rate_limiter(limit=120, window=60))])
 async def view_shared_report(share_token: str):
     """Render a public, read-only shared report."""
     try:

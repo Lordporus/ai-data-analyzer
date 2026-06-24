@@ -54,7 +54,7 @@ class CleaningAgent(BaseAgent):
 
     name = "CleaningAgent"
 
-    def _execute(self, input_data: IngestionResult, handle_missing: str = "ignore") -> CleaningResult:
+    def _execute(self, input_data: IngestionResult, handle_missing: str = "impute") -> CleaningResult:
         df = input_data.dataframe.copy()
         types = dict(input_data.detected_types)
         clog = CleaningLog()
@@ -100,15 +100,20 @@ class CleaningAgent(BaseAgent):
                     clog.add("convert_dates", f"Could not parse '{col}' as datetime", 0)
 
         # 4 ── Handle missing numeric values ─────────────────────────────
-        # Skipped by default (handle_missing="ignore") to protect raw data.
-        # Only applied when caller explicitly requests imputation.
+        # Default pipeline behavior is SaaS-safe imputation: numeric columns
+        # should be analysis-ready after cleaning without changing row count.
         if handle_missing == "impute":
             num_cols = [c for c, t in types.items() if t == "numeric"]
             for col in num_cols:
                 if col in df.columns:
+                    df[col] = pd.to_numeric(df[col], errors="coerce")
                     n_missing = int(df[col].isnull().sum())
                     if n_missing > 0:
                         median_val = df[col].median()
+                        if pd.isna(median_val):
+                            median_val = df[col].mean()
+                        if pd.isna(median_val):
+                            median_val = 0
                         df[col] = df[col].fillna(median_val)
                         clog.add(
                             "fill_missing",

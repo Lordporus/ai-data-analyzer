@@ -36,18 +36,19 @@ def load_google_sheet(url: str) -> pd.DataFrame:
     try:
         import gspread
         
-        # Look for credentials JSON in environment or local file
+        # Look for credentials JSON in environment. Root-level credential files
+        # are allowed only for explicit local development.
         creds_json = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON", "")
         if creds_json:
             creds_dict = json.loads(creds_json)
             gc = gspread.service_account_from_dict(creds_dict)
-        elif os.path.exists("service_account.json"):
+        elif os.getenv("ALLOW_LOCAL_SERVICE_ACCOUNT_FILE", "false").lower() == "true" and os.path.exists("service_account.json"):
             gc = gspread.service_account(filename="service_account.json")
         else:
             raise ValueError(
                 "Google Sheets credentials not found. For private sheets, please provide a "
-                "local 'service_account.json' file or set the GOOGLE_SERVICE_ACCOUNT_JSON "
-                "environment variable."
+                "GOOGLE_SERVICE_ACCOUNT_JSON environment variable. Local service_account.json "
+                "fallback is disabled unless ALLOW_LOCAL_SERVICE_ACCOUNT_FILE=true."
             )
             
         sh = gc.open_by_url(url)

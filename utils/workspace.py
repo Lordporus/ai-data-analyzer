@@ -105,7 +105,7 @@ def get_organizations(user_id: str = None) -> List[Dict]:
     
     for org in orgs:
         org.setdefault("plan", "free")
-    if not orgs and user_id:
+    if not orgs:
         default_org = create_organization("Default Team Workspace", user_id)
         return [default_org]
     return orgs

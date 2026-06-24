@@ -17,6 +17,7 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 from config.settings import APP_BASE_URL, OUTPUT_DIR
+from utils.monetization import is_beta_full_access
 
 LOCAL_DB_DIR = Path(__file__).resolve().parent.parent / "outputs" / "local_db"
 LOCAL_DB_DIR.mkdir(parents=True, exist_ok=True)
@@ -60,7 +61,7 @@ def create_share_link(result: Any, owner_user_id: str, dataset_name: str, plan: 
     data = _load_records()
     data.append(record)
     _save_records(data)
-    record["url"] = f"{APP_BASE_URL.rstrip('/')}/report/{token}"
+    record["url"] = f"{APP_BASE_URL.rstrip('/')}/?share_token={token}"
     return record
 
 
@@ -123,10 +124,10 @@ def render_shared_report_html(record: dict, result: Any) -> str:
         except Exception:
             dashboard_html = ""
 
-    # Only render download buttons for Pro-plan share links
+    # During beta, shared report exports are available without requiring Pro.
     _share_plan = str(record.get("plan", "free")).lower()
     downloads = []
-    if _share_plan == "pro":
+    if is_beta_full_access() or _share_plan == "pro":
         for label, path_attr, mime in [
             ("PDF Report", "pdf_report_path", "application/pdf"),
             ("Excel Report", "excel_report_path", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
@@ -140,8 +141,7 @@ def render_shared_report_html(record: dict, result: Any) -> str:
     _downloads_section = (
         ''.join(downloads)
         if downloads
-        else "<p style='color:#8b949e;'>Exports are available on the Pro plan. "
-             "Ask the report owner to upgrade for downloadable artifacts.</p>"
+        else "<p style='color:#8b949e;'>Exports are currently unavailable for this shared report.</p>"
     )
 
     return f"""<!doctype html>

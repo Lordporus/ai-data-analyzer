@@ -1,10 +1,11 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from utils.task_queue import run_analysis_task
 from pathlib import Path
+from utils.rate_limit import rate_limiter
 
 router = APIRouter()
 
-@router.get("/status/{job_id}")
+@router.get("/status/{job_id}", dependencies=[Depends(rate_limiter(limit=180, window=60))])
 def get_job_status(job_id: str):
     """
     Get the real-time execution status of an analysis job in the task queue.

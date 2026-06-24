@@ -171,14 +171,13 @@ class ForecastAgent(BaseAgent):
             logger.debug("Forecast skip (exclude pattern): %s", col_name)
             return False
 
-        # 2. Exclude sequential-integer pseudo-IDs.
-        # Strategy: a column is an ID when it has many unique integer values whose
-        # range is close to their count (i.e. they look like auto-increment keys).
-        # Genuine business metrics (Amount, Revenue) have a wide value range
-        # relative to their count, so they pass safely.
+        # 2. Exclude sequential pseudo-IDs only when the name also looks like an
+        # identifier. A steadily increasing metric such as sales or revenue can
+        # look sequential, so value shape alone is not enough to reject it.
         nuniq = series.nunique()
         n = len(series)
-        if nuniq > 0.9 * n:
+        id_name_hints = ("id", "code", "serial", "number", "no")
+        if nuniq > 0.9 * n and any(hint in col_lower for hint in id_name_hints):
             # Only reject if the values look sequential (range ≈ count)
             try:
                 numeric_series = pd.to_numeric(series, errors='coerce').dropna()
@@ -230,7 +229,7 @@ class ForecastAgent(BaseAgent):
         """
         # Dynamic period selection based on data frequency
         if periods is None:
-            _PERIOD_MAP = {"D": 30, "W": 12, "M": 12, "Y": 5}
+            _PERIOD_MAP = {"D": 10, "W": 12, "M": 12, "Y": 5}
             periods = _PERIOD_MAP.get(period, 10)
 
         if hw_warnings is None:

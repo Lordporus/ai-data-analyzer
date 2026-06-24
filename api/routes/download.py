@@ -6,13 +6,15 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Cookie, Header, Query
+from fastapi import APIRouter, HTTPException, Cookie, Header, Query, Depends
 from fastapi.responses import FileResponse
 
 from config.settings import APP_BASE_URL, OUTPUT_DIR, API_KEY_ENTERPRISE
 from utils.auth import load_session_token
+from utils.monetization import is_beta_full_access
 from utils.workspace import check_job_ownership, get_job_org_plan
 from utils.share_reports import get_shared_report
+from utils.rate_limit import rate_limiter
 
 router = APIRouter()
 
@@ -25,7 +27,7 @@ FILE_MAP = {
 }
 FILENAME_MAP = {v[0]: v[1] for k, v in FILE_MAP.items()}
 
-@router.get("/download/{job_id}/{filename}")
+@router.get("/download/{job_id}/{filename}", dependencies=[Depends(rate_limiter(limit=120, window=60))])
 async def download_file(
     job_id: str, 
     filename: str,
@@ -72,6 +74,9 @@ async def download_file(
 
     if not is_authorized:
         raise HTTPException(401, "Authentication required.")
+
+    if is_beta_full_access():
+        is_pro = True
 
     # ── Plan gate — all file exports require Pro ──────────────────────
     if not is_pro:

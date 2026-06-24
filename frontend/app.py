@@ -30,10 +30,22 @@ import extra_streamlit_components as stx
 from config.settings import API_INTERNAL_URL, BRAND_NAME, BRAND_COLOR, OUTPUT_DIR, UPLOAD_DIR, is_llm_enabled, SCHEDULER_ENABLED
 from orchestrator.master import MasterOrchestrator, PipelineResult
 from agents.data_quality import score_color, risk_level
-from utils.auth import login_user, signup_user, save_session_token, load_session_token, delete_session_token, get_supabase_client, get_service_supabase_client
+try:
+    from utils.auth import AuthError, login_user, signup_user, save_session_token, load_session_token, delete_session_token, get_supabase_client, get_service_supabase_client
+except ImportError:
+    from utils.auth import login_user, signup_user, save_session_token, load_session_token, delete_session_token, get_supabase_client, get_service_supabase_client
+
+    class AuthError(Exception):
+        pass
 from utils.workspace import create_organization, get_organizations, add_analysis_run, get_org_analysis_history
-from utils.storage import upload_to_r2, LOCAL_STORAGE_DIR
+from utils.storage import upload_to_r2, upload_deliverables_to_r2, fetch_file_bytes, LOCAL_STORAGE_DIR
 from utils.share_reports import create_share_link, revoke_share_link
+from utils.comparison import (
+    COMPARISON_FILE_SIZE_LIMIT_BYTES,
+    ComparisonValidationError,
+    compare_two_dataframes,
+    load_comparison_csv,
+)
 from utils.monetization import (
     FREE_ANALYSIS_LIMIT,
     FREE_FILE_SIZE_BYTES,
@@ -42,11 +54,13 @@ from utils.monetization import (
     can_run_analysis,
     can_upload_file,
     count_monthly_analyses,
+    is_beta_full_access,
     is_pro_org,
     org_plan,
 )
 
 
+@st.cache_data(show_spinner=False, ttl=300)
 def load_analysis_result_from_storage(output_path: str):
     """
     Downloads or reads the pickled pipeline result.
@@ -54,7 +68,7 @@ def load_analysis_result_from_storage(output_path: str):
     If it is a local path (outputs/persistent_storage/key), loads locally.
     """
     if output_path.startswith("http://") or output_path.startswith("https://"):
-        res = requests.get(output_path)
+        res = requests.get(output_path, timeout=30)
         res.raise_for_status()
         return loads_pipeline_result(res.content)
     else:
@@ -65,6 +79,29 @@ def load_analysis_result_from_storage(output_path: str):
             return load_pipeline_result(str(local_path))
         else:
             raise FileNotFoundError(f"Local persistent analysis file not found: {local_path}")
+
+
+def _auth_feedback_message(exc: Exception, default: str) -> str:
+    if isinstance(exc, AuthError):
+        return str(exc)
+    message = str(exc).strip()
+    return message or default
+
+
+@st.cache_data(show_spinner=False, ttl=60)
+def _cached_org_history(org_id: str):
+    return get_org_analysis_history(org_id)
+
+
+@st.cache_resource(show_spinner=False, ttl=300)
+def _cached_supabase_auth_client():
+    return get_supabase_client()
+
+
+@st.cache_resource(show_spinner=False, ttl=300)
+def _cached_supabase_service_client():
+    return get_service_supabase_client()
+
 
 def save_to_history(dataset_name: str, result_summary):
     """
@@ -95,6 +132,78 @@ def save_to_history(dataset_name: str, result_summary):
     # Prepend and limit to 5
     st.session_state["history"] = [run] + [r for r in st.session_state["history"] if r["id"] != run["id"]][:4]
 
+
+def _render_compare_file_summary(label: str, uploaded_file, df: pd.DataFrame) -> None:
+    size_mb = (getattr(uploaded_file, "size", 0) or 0) / (1024 * 1024)
+    st.success(f"{label} ready")
+    st.caption(f"{uploaded_file.name} | {len(df):,} rows | {len(df.columns):,} columns | {size_mb:.2f} MB")
+
+
+def render_comparison_results(result: dict) -> None:
+    overview = result["overview"]
+    schema = result["schema"]
+    quality = result["quality"]
+    numeric_rows = result["numeric_differences"]
+
+    st.markdown("#### Overview")
+    m1, m2, m3, m4, m5, m6 = st.columns(6)
+    m1.metric("File A Rows", f"{overview['file_a_rows']:,}")
+    m2.metric("File B Rows", f"{overview['file_b_rows']:,}")
+    m3.metric("Row Difference", f"{overview['row_difference']:+,}")
+    m4.metric("Shared Columns", f"{overview['shared_columns_count']:,}")
+    m5.metric("Only in A", f"{overview['only_a_count']:,}")
+    m6.metric("Only in B", f"{overview['only_b_count']:,}")
+
+    st.markdown("#### Schema Comparison")
+    schema_df = pd.DataFrame({
+        "Shared Columns": pd.Series(schema["shared_columns"]),
+        "Only in File A": pd.Series(schema["only_a"]),
+        "Only in File B": pd.Series(schema["only_b"]),
+    })
+    st.dataframe(schema_df, use_container_width=True, hide_index=True)
+    if schema["type_mismatches"]:
+        st.warning("Some shared columns have different inferred types.")
+        st.dataframe(pd.DataFrame(schema["type_mismatches"]), use_container_width=True, hide_index=True)
+
+    st.markdown("#### Data Quality Comparison")
+    quality_df = pd.DataFrame([
+        {
+            "File": "File A",
+            "Missing Values": quality["file_a"]["missing_values"],
+            "Duplicate Rows": quality["file_a"]["duplicates"],
+            "Empty Columns": len(quality["file_a"]["empty_columns"]),
+        },
+        {
+            "File": "File B",
+            "Missing Values": quality["file_b"]["missing_values"],
+            "Duplicate Rows": quality["file_b"]["duplicates"],
+            "Empty Columns": len(quality["file_b"]["empty_columns"]),
+        },
+    ])
+    st.dataframe(quality_df, use_container_width=True, hide_index=True)
+
+    st.markdown("#### Numeric Difference Table")
+    if numeric_rows:
+        numeric_df = pd.DataFrame(numeric_rows)
+        st.dataframe(numeric_df, use_container_width=True, hide_index=True)
+
+        chart_df = numeric_df.head(8)
+        fig = go.Figure()
+        fig.add_trace(go.Bar(name="File A Mean", x=chart_df["Metric"], y=chart_df["File A Mean"]))
+        fig.add_trace(go.Bar(name="File B Mean", x=chart_df["Metric"], y=chart_df["File B Mean"]))
+        fig.update_layout(
+            barmode="group",
+            template="plotly_dark",
+            height=380,
+            margin=dict(l=20, r=20, t=30, b=20),
+        )
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info("No shared numeric columns were found for metric comparison.")
+
+    st.markdown("#### Summary")
+    st.info(result["plain_english_summary"])
+
 # ── Page config ──────────────────────────────────────────────────────
 st.set_page_config(
     page_title=f"{BRAND_NAME}",
@@ -112,6 +221,35 @@ if os.path.exists(_CSS_PATH):
         st.markdown(f"<style>{_f.read()}</style>",
                     unsafe_allow_html=True)
 
+# ── Shared Report Proxy ──────────────────────────────────────────────
+share_token = st.query_params.get("share_token")
+if share_token:
+    try:
+        from utils.share_reports import get_shared_report
+        from frontend.dashboard_ui import render_interactive_dashboard
+        
+        record, result = get_shared_report(share_token)
+        
+        # Hide Streamlit's default headers, sidebar, padding, and inject custom CSS for Read-Only mode
+        st.markdown("""
+        <style>
+            header {visibility: hidden;} 
+            section[data-testid="stSidebar"] {display: none;}
+            .main .block-container {padding-top: 2rem; max-width: 1200px;}
+        </style>
+        """, unsafe_allow_html=True)
+        
+        st.info(f"**Read-Only View** | Shared by {record.get('dataset_name', 'Analyst')}. Expires {record.get('expires_at', '')[:10]}")
+        
+        if result.status in ("completed", "completed_with_warnings"):
+            render_interactive_dashboard(result)
+        else:
+            st.error("This report did not complete successfully.")
+            
+        st.stop()
+    except Exception as e:
+        st.error(f"Could not load the shared report: {e}")
+        st.stop()
 
 # ── Monetization Helpers ─────────────────────────────────────────────
 def _current_org() -> dict:
@@ -119,6 +257,8 @@ def _current_org() -> dict:
 
 
 def _current_plan() -> str:
+    if is_beta_full_access():
+        return "beta"
     return org_plan(_current_org())
 
 
@@ -132,6 +272,9 @@ def _refresh_active_org_plan(plan: str) -> None:
 
 
 def _start_razorpay_checkout() -> None:
+    if is_beta_full_access():
+        st.info("Beta mode includes full access right now. Checkout is dormant until monetization is enabled.")
+        return
     org = _current_org()
     user = st.session_state.get("user", {})
     if not org.get("id") or org.get("id") == "demo":
@@ -167,7 +310,10 @@ def show_profile_modal():
     plan = _current_plan()
     used = count_monthly_analyses(org.get("id", "default"))
     st.markdown(f"### {org.get('name', 'Workspace')}")
-    if plan == "pro":
+    if plan == "beta":
+        st.success("Beta Access")
+        st.metric("Analyses this month", used, "Unlimited during beta")
+    elif plan == "pro":
         st.success("⚡ Pro Plan")
         st.metric("Analyses this month", used, "Unlimited")
     else:
@@ -175,7 +321,9 @@ def show_profile_modal():
         st.metric("Analyses this month", f"{used}/{FREE_ANALYSIS_LIMIT}")
         st.progress(min(used / FREE_ANALYSIS_LIMIT, 1.0))
     st.divider()
-    if plan == "pro":
+    if plan == "beta":
+        st.info("Billing and Pro restrictions are paused while beta testing is active.")
+    elif plan == "pro":
         st.link_button("Manage Billing", billing_portal_url(), use_container_width=True)
     else:
         if st.button("Upgrade to Pro — $5/month", type="primary", use_container_width=True, key="profile_upgrade_btn"):
@@ -341,7 +489,7 @@ if "user" not in st.session_state:
     _saved_token = _cookie_manager.get("session_token") or ""
     if _saved_token:
         _restored_user = None
-        _supabase_client = get_supabase_client()
+        _supabase_client = _cached_supabase_auth_client()
         if _supabase_client and ":::" in _saved_token:
             try:
                 _parts = _saved_token.split(":::")
@@ -390,7 +538,7 @@ if "user" not in st.session_state:
             
             # Fetch profile name — must use service client to bypass RLS
             # (anon client has no user JWT so auth.uid() is null → query blocked)
-            _profile_client = get_service_supabase_client()
+            _profile_client = _cached_supabase_service_client()
             if _profile_client:
                 try:
                     profile_res = _profile_client.table("profiles").select("full_name, plan").eq("id", _restored_user["id"]).single().execute()
@@ -444,7 +592,7 @@ if "user" not in st.session_state:
                     st.session_state["user"] = user
                     
                     # Fetch profile name — must use service client to bypass RLS
-                    _profile_client = get_service_supabase_client()
+                    _profile_client = _cached_supabase_service_client()
                     if _profile_client:
                         try:
                             profile_res = _profile_client.table("profiles").select("full_name, plan").eq("id", user["id"]).single().execute()
@@ -471,12 +619,13 @@ if "user" not in st.session_state:
                             "session_token", _token
                         )
                         
-                    st.success("🎉 Welcome back! Logging you in...")
-                    time.sleep(1)
+                    st.success("Welcome back! Logging you in...")
                     _login_ok = True
                 except Exception as e:
-                    st.error("Connection failed. Please check your "
-                             "credentials and try again.")
+                    st.error(_auth_feedback_message(
+                        e,
+                        "Could not sign in. Please check your credentials and try again.",
+                    ))
                 if _login_ok:
                     st.rerun()
                     
@@ -532,13 +681,14 @@ if "user" not in st.session_state:
                                     "session_token", _token
                                 )
 
-                            st.success("🎉 Account created successfully! Logging you in...")
-                            time.sleep(1)
+                            st.success("Account created successfully! Logging you in...")
                             _signup_ok = True
 
                     except Exception as e:
-                        st.error("Connection failed. Please check your "
-                                 "credentials and try again.")
+                        st.error(_auth_feedback_message(
+                            e,
+                            "Could not create your account. Please check the details and try again.",
+                        ))
                     if _signup_ok:
                         st.rerun()
     st.stop()
@@ -570,7 +720,9 @@ with st.sidebar:
     _avatar_letter = _display_name[0].upper() if _display_name and _display_name != 'User' else 'U'
     _sidebar_plan = _current_plan()
 
-    if _sidebar_plan == "pro":
+    if _sidebar_plan == "beta":
+        _plan_badge_html = '<span class="plan-badge pro">Beta Access</span>'
+    elif _sidebar_plan == "pro":
         _plan_badge_html = '<span class="plan-badge pro">⚡ Pro Plan</span>'
     else:
         _plan_badge_html = '<span class="plan-badge free">Free Plan</span>'
@@ -587,12 +739,12 @@ with st.sidebar:
     </div>
     """, unsafe_allow_html=True)
 
-    if _sidebar_plan != "pro":
+    if _sidebar_plan not in {"pro", "beta"}:
         if st.button("🚀 Upgrade to Pro →", type="primary", use_container_width=True, key="user_card_upgrade"):
             show_upgrade_modal()
 
     # ── Usage Meter (Free plan only) ─────────────────────────────
-    if _sidebar_plan != "pro":
+    if _sidebar_plan not in {"pro", "beta"}:
         _org_id = _current_org().get("id", "default")
         _current_user_id = st.session_state.get("user", {}).get("id", "")
         _used = count_monthly_analyses(_org_id, user_id=_current_user_id)
@@ -616,7 +768,7 @@ with st.sidebar:
         # Revoke persistent session token (BUG 2 fix)
         _logout_token = st.session_state.get("_session_token", "") or _cookie_manager.get("session_token") or ""
         if _logout_token:
-            _supabase_client = get_supabase_client()
+            _supabase_client = _cached_supabase_auth_client()
             if _supabase_client and ":::" in _logout_token:
                 try:
                     _supabase_client.auth.sign_out()
@@ -628,7 +780,6 @@ with st.sidebar:
         _cookie_manager.delete("session_token")
         st.session_state.clear()
         st.success("Logged out successfully!")
-        time.sleep(0.5)
         st.rerun()
         
     st.markdown("---")
@@ -683,8 +834,8 @@ with st.sidebar:
                 st.session_state["active_org"] = new_org
                 if "orgs" in st.session_state:
                     del st.session_state["orgs"]
+                _cached_org_history.clear()
                 st.success(f"Workspace '{new_org_name}' created!")
-                time.sleep(0.5)
                 st.rerun()
             else:
                 st.error("Name cannot be empty.")
@@ -720,14 +871,13 @@ with st.sidebar:
                         st.session_state["analysis_result"] = run["result"]
                         st.session_state["analysis_complete"] = True
                         st.success("Loaded from session history!")
-                        time.sleep(0.5)
                         st.rerun()
 
     with st.expander("📜 Shared History", expanded=False):
         if "active_org" in st.session_state:
             active_org = st.session_state["active_org"]
             if "org_history" not in st.session_state:
-                st.session_state["org_history"] = get_org_analysis_history(active_org["id"])
+                st.session_state["org_history"] = _cached_org_history(active_org["id"])
             history = st.session_state["org_history"]
             if not history:
                 st.info("No shared analysis runs in this workspace yet.")
@@ -750,7 +900,6 @@ with st.sidebar:
                                 st.session_state["analysis_complete"] = True
                                 save_to_history(run.get("dataset_name", "Dataset"), loaded_result)
                                 st.success("Loaded!")
-                                time.sleep(0.5)
                                 _load_ok = True
                             except Exception as e:
                                 st.error(f"Failed to load run: {e}")
@@ -900,7 +1049,7 @@ st.markdown(f"""
 
 
 # Sticky bottom upgrade banner
-if _current_plan() != "pro" and not st.session_state.get("banner_dismissed", False):
+if _current_plan() not in {"pro", "beta"} and not st.session_state.get("banner_dismissed", False):
     st.markdown("---")
     _b1, _b2, _b3 = st.columns([3, 1, 0.5])
     _b1.markdown(
@@ -1005,7 +1154,7 @@ with tab_upload:
             upload_ok, upload_msg = can_upload_file(_current_org(), len(file_bytes))
             if not upload_ok:
                 st.error(upload_msg)
-                if st.button("⚡ Upgrade to upload up to 50MB", type="primary", use_container_width=True, key="file_size_upgrade_btn"):
+                if not is_beta_full_access() and st.button("⚡ Upgrade to upload up to 50MB", type="primary", use_container_width=True, key="file_size_upgrade_btn"):
                     show_upgrade_modal()
             else:
                 temp_path = temp_dir / uploaded_file.name
@@ -1196,7 +1345,7 @@ with tab_upload:
                 run_allowed, run_msg, _, _ = can_run_analysis(_current_org(), user_id=_cur_user_id)
                 if not run_allowed:
                     st.error(run_msg)
-                    if st.button("⚡ Upgrade to Pro for unlimited analyses", type="primary", use_container_width=True, key="analysis_limit_upgrade_btn"):
+                    if not is_beta_full_access() and st.button("⚡ Upgrade to Pro for unlimited analyses", type="primary", use_container_width=True, key="analysis_limit_upgrade_btn"):
                         show_upgrade_modal()
                     st.stop()
                 else:
@@ -1352,13 +1501,22 @@ with tab_upload:
                         st.write("📄 Building PDF report...")
                         progress_bar.progress(1.0, text="✅ Complete!")
 
-                        # ── Persist analysis run in workspace ──────────────────────
+                        # ── Upload all deliverable files to R2 ─────────────────────
                         run_id = result.job_id or str(_uuid.uuid4())
-                        storage_key = f"{run_id}_pipeline_result.json"
                         dataset_name = uploaded_file.name if uploaded_file else temp_path.name
+                        uploaded_jobs = st.session_state.setdefault("_deliverables_uploaded_jobs", [])
+                        if run_id not in uploaded_jobs:
+                            try:
+                                upload_deliverables_to_r2(result, run_id)
+                                uploaded_jobs.append(run_id)
+                            except Exception as _r2_deliv_err:
+                                print(f"R2 deliverable upload error (non-fatal): {_r2_deliv_err}")
+
+                        # ── Persist analysis state (pickle/JSON) to R2 ─────────────
+                        storage_key = f"{run_id}_pipeline_result.json"
                         try:
-                            from utils.storage import upload_to_r2
-                            from utils.workspace import add_analysis_run
+                            # Re-serialize after R2 URLs have been written into result
+                            dump_pipeline_result(result, str(pickle_path))
                             public_url = upload_to_r2(pickle_path, storage_key)
                             active_org = st.session_state.get("active_org", {"id": "default"})
                             user_info_ws = st.session_state.get("user", {"id": "anonymous"})
@@ -1375,6 +1533,7 @@ with tab_upload:
 
                         if "org_history" in st.session_state:
                             del st.session_state["org_history"]
+                        _cached_org_history.clear()
 
                         # STORE RESULT IN SESSION STATE
                         st.session_state["analysis_result"] = result
@@ -1396,9 +1555,6 @@ with tab_upload:
                 time.sleep(0.3)
                 st.rerun()
 
-            time.sleep(0.5)
-            if st.session_state.get("analysis_complete"):
-                st.balloons()
             st.rerun()  # Force rerun to render from state
 
     # ── RENDERING BLOCK (FROM STATE) ─────────────────────────────────────
@@ -1420,10 +1576,11 @@ with tab_upload:
             
             with dl_cols[0]:
                 if is_pro_org(_current_org()):
-                    if getattr(result, "cleaned_csv_path", "") and Path(result.cleaned_csv_path).exists():
+                    _csv_bytes = fetch_file_bytes(getattr(result, "cleaned_csv_path", "")) if getattr(result, "cleaned_csv_path", "") else None
+                    if _csv_bytes:
                         st.download_button(
                             "📊 Cleaned CSV",
-                            data=Path(result.cleaned_csv_path).read_bytes(),
+                            data=_csv_bytes,
                             file_name="cleaned_data.csv",
                             mime="text/csv",
                             use_container_width=True,
@@ -1435,10 +1592,11 @@ with tab_upload:
 
             with dl_cols[1]:
                 if is_pro_org(_current_org()):
-                    if getattr(result, "pdf_report_path", "") and Path(result.pdf_report_path).exists():
+                    _pdf_bytes = fetch_file_bytes(getattr(result, "pdf_report_path", "")) if getattr(result, "pdf_report_path", "") else None
+                    if _pdf_bytes:
                         st.download_button(
                             "📄 PDF Report",
-                            data=Path(result.pdf_report_path).read_bytes(),
+                            data=_pdf_bytes,
                             file_name="report.pdf",
                             mime="application/pdf",
                             use_container_width=True,
@@ -1450,10 +1608,11 @@ with tab_upload:
 
             with dl_cols[2]:
                 if is_pro_org(_current_org()):
-                    if getattr(result, "dashboard_html_path", "") and Path(result.dashboard_html_path).exists():
+                    _html_bytes = fetch_file_bytes(getattr(result, "dashboard_html_path", "")) if getattr(result, "dashboard_html_path", "") else None
+                    if _html_bytes:
                         st.download_button(
                             "📊 Dashboard HTML",
-                            data=Path(result.dashboard_html_path).read_bytes(),
+                            data=_html_bytes,
                             file_name="dashboard.html",
                             mime="text/html",
                             use_container_width=True,
@@ -1465,10 +1624,11 @@ with tab_upload:
 
             with dl_cols[3]:
                 if is_pro_org(_current_org()):
-                    if getattr(result, "markdown_report_path", "") and Path(result.markdown_report_path).exists():
+                    _md_bytes = fetch_file_bytes(getattr(result, "markdown_report_path", "")) if getattr(result, "markdown_report_path", "") else None
+                    if _md_bytes:
                         st.download_button(
                             "📝 Markdown Report",
-                            data=Path(result.markdown_report_path).read_bytes(),
+                            data=_md_bytes,
                             file_name="report.md",
                             mime="text/markdown",
                             use_container_width=True,
@@ -1480,10 +1640,11 @@ with tab_upload:
 
             with dl_cols[4]:
                 if is_pro_org(_current_org()):
-                    if getattr(result, "excel_report_path", "") and Path(result.excel_report_path).exists():
+                    _xl_bytes = fetch_file_bytes(getattr(result, "excel_report_path", "")) if getattr(result, "excel_report_path", "") else None
+                    if _xl_bytes:
                         st.download_button(
                             "📗 Excel Report",
-                            data=Path(result.excel_report_path).read_bytes(),
+                            data=_xl_bytes,
                             file_name="analysis_report.xlsx",
                             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                             use_container_width=True,
@@ -1499,7 +1660,7 @@ with tab_upload:
                 try:
                     user_info = st.session_state.get("user", {"id": "anonymous"})
                     dataset_name_for_share = st.session_state.get("analysis_dataset_name", "analysis_report")
-                    plan = _current_plan()
+                    plan = "pro" if is_beta_full_access() else _current_plan()
                     share_record = create_share_link(
                         result=result,
                         owner_user_id=user_info.get("id", "anonymous"),
@@ -1539,50 +1700,12 @@ with tab_upload:
             if SCHEDULER_ENABLED:
                 st.markdown("---")
                 st.subheader("📅 Schedule Recurring Email Reports")
-                st.markdown("Set up a regular automated run of this analysis and have the PDF report emailed to you automatically.")
-                
-                sched_col1, sched_col2 = st.columns(2)
-                with sched_col1:
-                    schedule_email = st.text_input("Recipient Email Address", placeholder="analyst@company.com")
-                with sched_col2:
-                    schedule_day = st.selectbox("Frequency (Send every)", ["Monday", "Wednesday", "Friday", "Daily"])
-                
-                if st.button("⏰ Set Recurring Schedule", type="secondary"):
-                    if not schedule_email:
-                        st.error("Please enter a valid email address.")
-                    else:
-                        import uuid
-                        import shutil
-                        from utils.scheduler import add_scheduled_job
-                        
-                        # Ensure the dataset file is persistently stored for scheduling runs
-                        schedules_dir = UPLOAD_DIR / "schedules"
-                        schedules_dir.mkdir(parents=True, exist_ok=True)
-                        persistent_path = schedules_dir / f"sched_{uuid.uuid4().hex[:8]}_{temp_path.name}"
-                        shutil.copy2(temp_path, persistent_path)
-                        
-                        # Map day selection to APScheduler day_of_week
-                        day_mapping = {
-                            "Monday": "mon",
-                            "Wednesday": "wed",
-                            "Friday": "fri",
-                            "Daily": "*"
-                        }
-                        cron_day = day_mapping.get(schedule_day, "*")
-                        
-                        # Add to APScheduler
-                        job_id = f"sched_{uuid.uuid4().hex[:12]}"
-                        success = add_scheduled_job(
-                            job_id=job_id,
-                            day_of_week_val=cron_day,
-                            email=schedule_email,
-                            dataset_path=str(persistent_path)
-                        )
-                        
-                        if success:
-                            st.success(f"🎉 Scheduled successfully! You'll receive this report every **{schedule_day}** at 9:00 AM at **{schedule_email}**.")
-                        else:
-                            st.error("Failed to schedule the report. Please check if the scheduler is enabled in your environment.")
+                st.info(
+                    "**Coming Soon!**\n\n"
+                    "In a future update, you'll be able to connect live databases (PostgreSQL, Snowflake, etc.) "
+                    "and schedule automated email deliveries of this dashboard to your team.",
+                    icon="🚀"
+                )
 
 
         else:
@@ -1593,132 +1716,67 @@ with tab_upload:
 # TAB 2 — Multi-File Comparison
 # ═══════════════════════════════════════════════════════════════════════
 with tab_compare:
-    st.markdown("### 🔀 Multi-File Comparison")
-    st.markdown("Upload multiple CSV or Excel files to compare their statistics side-by-side.")
+    st.markdown("### 🔀 Compare Two CSV Files")
+    st.markdown("Upload two small CSV files to compare structure, quality, and numeric differences side by side.")
 
-    compare_files = st.file_uploader(
-        "Upload CSV/Excel files for comparison",
-        type=["csv", "xlsx", "xls"],
-        accept_multiple_files=True,
-        key="compare_upload",
+    file_a = None
+    file_b = None
+    df_a = None
+    df_b = None
+    validation_errors = []
+
+    upload_col_a, upload_col_b = st.columns(2)
+    with upload_col_a:
+        st.markdown("#### File A")
+        file_a = st.file_uploader(
+            "Upload File A",
+            type=["csv"],
+            accept_multiple_files=False,
+            key="compare_file_a",
+        )
+        if file_a is not None:
+            try:
+                df_a = load_comparison_csv(file_a)
+                _render_compare_file_summary("File A", file_a, df_a)
+            except ComparisonValidationError as exc:
+                validation_errors.append(f"File A: {exc}")
+                st.error(str(exc))
+
+    with upload_col_b:
+        st.markdown("#### File B")
+        file_b = st.file_uploader(
+            "Upload File B",
+            type=["csv"],
+            accept_multiple_files=False,
+            key="compare_file_b",
+        )
+        if file_b is not None:
+            try:
+                df_b = load_comparison_csv(file_b)
+                _render_compare_file_summary("File B", file_b, df_b)
+            except ComparisonValidationError as exc:
+                validation_errors.append(f"File B: {exc}")
+                st.error(str(exc))
+
+    if (file_a is None) ^ (file_b is None):
+        st.info("Upload the second CSV to compare.")
+
+    compare_ready = df_a is not None and df_b is not None and not validation_errors
+    if st.button(
+        "🔄 Compare Files",
+        type="primary",
+        use_container_width=True,
+        disabled=not compare_ready,
+        key="compare_two_csv_btn",
+    ):
+        with st.spinner("Comparing CSV files..."):
+            comparison_result = compare_two_dataframes(df_a, df_b)
+        render_comparison_results(comparison_result)
+
+    st.caption(
+        f"CSV only. Maximum file size: {COMPARISON_FILE_SIZE_LIMIT_BYTES // (1024 * 1024)} MB per file. "
+        "This comparison runs in memory and does not save files to workspace history."
     )
-
-    if compare_files and len(compare_files) >= 2:
-        if st.button("🔄 Compare Files", type="primary", use_container_width=True):
-            # CHANGE 1 — Filter irrelevant columns before stats computation
-            _irrelevant_keywords = ("id", "unnamed", "postal", "code", "index", "zip", "age")
-
-            comparison_data = []
-            progress = st.progress(0, text="Analyzing files...")
-            _file_shapes = []  # store (filename, rows, cols) after filtering
-            _file_dfs = []    # store filtered dataframes for biggest-difference computation
-
-            for idx, cfile in enumerate(compare_files):
-                ext = cfile.name.lower()
-                if ext.endswith(".xlsx") or ext.endswith(".xls"):
-                    df = pd.read_excel(cfile, engine="openpyxl")
-                else:
-                    df = pd.read_csv(cfile)
-
-                # Filter out irrelevant columns by name
-                filtered_cols = [
-                    c for c in df.columns
-                    if not any(kw in c.lower() for kw in _irrelevant_keywords)
-                ]
-                df = df[filtered_cols]
-
-                _file_shapes.append((cfile.name, len(df), len(df.columns)))
-                _file_dfs.append(df)
-
-                num_cols = df.select_dtypes(include="number").columns.tolist()
-                stats_row = {
-                    "File": cfile.name,
-                    "Rows": len(df),
-                    "Columns": len(df.columns),
-                    "Missing Values": int(df.isnull().sum().sum()),
-                    "Duplicates": int(df.duplicated().sum()),
-                }
-                for col in num_cols[:5]:
-                    stats_row[f"{col} (mean)"] = round(df[col].mean(), 2)
-                    stats_row[f"{col} (std)"] = round(df[col].std(), 2)
-
-                comparison_data.append(stats_row)
-                progress.progress((idx + 1) / len(compare_files))
-
-            progress.empty()
-
-            comp_df = pd.DataFrame(comparison_data)
-            st.markdown("#### 📊 Comparison Table")
-            st.dataframe(comp_df, use_container_width=True)
-
-            # Overlay chart for shared numeric columns
-            import plotly.graph_objects as go
-
-            shared_metric_cols = [
-                c for c in comp_df.columns
-                if c not in ("File", "Rows", "Columns", "Missing Values", "Duplicates")
-            ]
-            if shared_metric_cols:
-                # CHANGE 2 — Exclude columns whose mean is >10x the median of all column means
-                import numpy as _np
-                _all_means = [comp_df[c].mean() for c in shared_metric_cols]
-                _median_of_means = _np.median(_all_means) if _all_means else 0
-                chart_metric_cols = [
-                    c for c, m in zip(shared_metric_cols, _all_means)
-                    if _median_of_means == 0 or abs(m) <= 10 * abs(_median_of_means)
-                ]
-
-                st.markdown("#### 📈 Metric Comparison")
-                fig = go.Figure()
-                for _, row in comp_df.iterrows():
-                    fig.add_trace(go.Bar(
-                        name=str(row["File"]),
-                        x=chart_metric_cols,
-                        y=[row[c] for c in chart_metric_cols],
-                    ))
-                fig.update_layout(
-                    barmode="group",
-                    template="plotly_dark",
-                    height=400,
-                )
-                st.plotly_chart(fig, use_container_width=True)
-
-                # CHANGE 3 — Plain-English summary below chart
-                if len(_file_shapes) >= 2:
-                    _fn1, _r1, _c1 = _file_shapes[0]
-                    _fn2, _r2, _c2 = _file_shapes[1]
-                    st.write(f"File 1: {_fn1} — {_r1} rows, {_c1} columns")
-                    st.write(f"File 2: {_fn2} — {_r2} rows, {_c2} columns")
-
-                    try:
-                        _d1 = _file_dfs[0].select_dtypes(include="number")
-                        _d2 = _file_dfs[1].select_dtypes(include="number")
-                        _shared = [c for c in _d1.columns if c in _d2.columns]
-                        _best_col = None
-                        _best_pct = 0
-                        _best_dir = ""
-                        for _c in _shared:
-                            _m1 = _d1[_c].dropna().mean()
-                            _m2 = _d2[_c].dropna().mean()
-                            if _m1 is None or _m2 is None:
-                                continue
-                            import math
-                            if math.isnan(_m1) or math.isnan(_m2) or _m1 == 0:
-                                continue
-                            _pct = abs(_m1 - _m2) / abs(_m1) * 100
-                            if _pct > _best_pct:
-                                _best_pct = _pct
-                                _best_col = _c
-                                _best_dir = "higher" if _m2 > _m1 else "lower"
-                        if _best_col:
-                            st.write(f"Biggest difference: {_best_col} is {_best_pct:.1f}% {_best_dir} in File 2 vs File 1.")
-                        else:
-                            st.write("Biggest difference: no common numeric columns found between the two files.")
-                    except:
-                        pass
-
-    elif compare_files and len(compare_files) < 2:
-        st.info("Please upload at least 2 files for comparison.")
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1815,13 +1873,20 @@ with tab_stream:
                     )
                     st.session_state["gsheets_live_result"] = _gs_result
 
-                    # Persist run in workspace
+                    # Upload deliverables to R2 first
                     _gs_job_id = _gs_result.job_id or f"gsheet_{int(time.time())}"
+                    _uploaded_jobs = st.session_state.setdefault("_deliverables_uploaded_jobs", [])
+                    if _gs_job_id not in _uploaded_jobs:
+                        try:
+                            upload_deliverables_to_r2(_gs_result, _gs_job_id)
+                            _uploaded_jobs.append(_gs_job_id)
+                        except Exception as _gs_r2_err:
+                            print(f"GSheet R2 deliverable upload error (non-fatal): {_gs_r2_err}")
+
+                    # Persist run state in workspace (re-serialize after R2 URLs updated)
                     _gs_pickle_path = _gs_output_dir / f"{_gs_job_id}_pipeline_result.json"
                     dump_pipeline_result(_gs_result, str(_gs_pickle_path))
                     try:
-                        from utils.storage import upload_to_r2
-                        from utils.workspace import add_analysis_run
                         _gs_public_url = upload_to_r2(str(_gs_pickle_path), f"{_gs_job_id}_pipeline_result.json")
                         _gs_active_org = st.session_state.get("active_org", {"id": "default"})
                         _gs_user_info = st.session_state.get("user", {"id": "anonymous"})

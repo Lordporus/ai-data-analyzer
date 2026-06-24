@@ -18,5 +18,8 @@ alter table public.org_members enable row level security;
 drop policy if exists "service_role_all_org_members" on public.org_members;
 create policy "service_role_all_org_members"
     on public.org_members for all
+    to service_role
     using (true)
     with check (true);
+
+grant all on public.org_members to service_role;

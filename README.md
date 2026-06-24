@@ -68,10 +68,17 @@ This repository contains a comprehensive set of planning, audit, and strategy do
    pip install -r requirements.txt
    ```
 
-4. **Install and run Redis (if using background tasks)**:
+4. **Run local verification tests**:
+   ```bash
+   python -m pytest -q
+   ```
+   The project includes `pytest.ini` and `tests/conftest.py` so tests ignore
+   generated/runtime folders and default to local-only service settings.
+
+5. **Install and run Redis (if using background tasks)**:
    Ensure `redis-server` is installed and running.
 
-5. **Start the application (Manual)**:
+6. **Start the application (Manual)**:
    - Terminal 1 (API): `uvicorn api.main:app --reload`
    - Terminal 2 (Celery): `celery -A utils.task_queue.celery_app worker --loglevel=info`
    - Terminal 3 (Streamlit): `streamlit run frontend/app.py`

@@ -10,15 +10,16 @@ import tempfile
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, File, Header, HTTPException, UploadFile
+from fastapi import APIRouter, File, Header, HTTPException, UploadFile, Depends
 
 from config.settings import API_KEY_ENTERPRISE, MAX_FILE_SIZE_BYTES, OUTPUT_DIR
 from orchestrator.master import MasterOrchestrator
+from utils.rate_limit import rate_limiter
 
 router = APIRouter()
 
 
-@router.post("/analyze")
+@router.post("/analyze", dependencies=[Depends(rate_limiter(limit=20, window=60))])
 async def enterprise_analyze(
     file: UploadFile = File(...),
     x_api_key: str = Header(..., alias="X-API-Key"),

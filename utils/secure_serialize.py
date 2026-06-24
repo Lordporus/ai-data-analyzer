@@ -1,5 +1,6 @@
 import json
 import base64
+import datetime
 import pandas as pd
 from dataclasses import is_dataclass, asdict
 
@@ -7,10 +8,22 @@ class PipelineEncoder(json.JSONEncoder):
     def default(self, obj):
         if is_dataclass(obj):
             return asdict(obj)
+        if isinstance(obj, (pd.Timestamp, datetime.datetime, datetime.date)):
+            if obj is pd.NaT:
+                return None
+            return obj.isoformat()
         if isinstance(obj, pd.DataFrame):
             import io
             buffer = io.BytesIO()
-            obj.to_parquet(buffer)
+            try:
+                obj.to_parquet(buffer)
+            except Exception:
+                # Fallback: Convert mixed type (object) columns to strings to satisfy Parquet strict typing
+                safe_df = obj.copy()
+                for col in safe_df.columns:
+                    if safe_df[col].dtype == 'object':
+                        safe_df[col] = safe_df[col].astype(str)
+                safe_df.to_parquet(buffer)
             return {"_type": "dataframe", "data": base64.b64encode(buffer.getvalue()).decode('utf-8')}
         # If it has a summary_dict method, it's the root PipelineResult but not a dataclass?
         if hasattr(obj, "summary_dict"):

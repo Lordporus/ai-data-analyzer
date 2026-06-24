@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
@@ -19,6 +19,7 @@ from api.routes.status import router as status_router
 from api.routes.share import router as share_router
 from api.routes.razorpay_billing import router as razorpay_billing_router
 from config.settings import BRAND_NAME, OUTPUT_DIR, is_llm_enabled, APP_BASE_URL
+from utils.rate_limit import rate_limiter
 
 # ── Logging ──────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -79,7 +80,7 @@ async def health_check():
     return {"status": "healthy", "service": BRAND_NAME}
 
 
-@app.get("/api/mock-stream", tags=["Mock Stream"])
+@app.get("/api/mock-stream", tags=["Mock Stream"], dependencies=[Depends(rate_limiter(limit=120, window=60))])
 async def mock_stream():
     """Generates random mock time-series sales data for real-time analysis testing."""
     import random
